@@ -26,7 +26,9 @@ function fixture(listed: string[]) {
   }
   apply(ctx as never)
   const entry = (name: string) => entries.find(item => item.options.name === name)!
-  return { ctx, entries, dictionaries, main: entry('main'), nav: entry('sidebar.panellist') }
+  return { ctx, entries, dictionaries, main: entry('main'), nav: entry('sidebar.panellist'),
+    desk: entries.find(item => item.options.key === 'dsh-superagent-desk')!,
+    deskNav: entries.find(item => item.options.id === 'dsh-superagent-desk')! }
 }
 async function render(entry: Entry, props: Record<string, unknown>) {
   const container = document.createElement('div'); document.body.append(container)
@@ -51,12 +53,21 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 it('registers a localized main panel, sidebar entry and Plugin Manager row page, and no settings section', () => {
   const { entries, dictionaries, main, nav } = fixture([])
-  expect(entries.map(entry => entry.options.name)).toEqual(['main', 'sidebar.panellist', 'plugins.row.config'])
-  expect(entries[2]!.options).toMatchObject({ key: 'dsh-superagent#dsh-superagent', locale: 'dshSuperagent' })
+  expect(entries.map(entry => entry.options.name)).toEqual(['main', 'main', 'sidebar.panellist', 'sidebar.panellist',
+    'plugins.row.config'])
+  expect(entries[4]!.options).toMatchObject({ key: 'dsh-superagent#dsh-superagent', locale: 'dshSuperagent' })
   expect(Object.keys(dictionaries)).toEqual(['dshSuperagent'])
   expect(main.options).toMatchObject({ key: 'dsh-superagent', locale: 'dshSuperagent' })
   expect(nav.options).toMatchObject({ id: 'dsh-superagent', order: 10, locale: 'dshSuperagent' })
   expect(nav.options.label?.()).toBe('Superagent')
+})
+
+it('carries the publishing desk as a sidebar row of its own, beside Superagent', () => {
+  const { desk, deskNav } = fixture([])
+  expect(desk.options).toMatchObject({ key: 'dsh-superagent-desk', locale: 'dshSuperagent' })
+  // The row addresses the panel of the same id, so clicking it opens the desk.
+  expect(deskNav.options).toMatchObject({ id: 'dsh-superagent-desk', order: 11, locale: 'dshSuperagent' })
+  expect(deskNav.options.label?.()).toBe(zh['tab.desk'])
 })
 
 it('opens a listed Session through the workspace from the main panel', async () => {

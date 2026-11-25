@@ -374,7 +374,14 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
-| `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
+| `src/feishu-publish.ts` | The publishing plugin, exported as `./feishu-publish`: the `feishu_publish` tool it puts on every agent, the skill that tells a model when to publish, and the configuration that fences both. The tool publishes only Markdown inside the configured roots, and rebuilds only a document this plugin published |
+| `src/feishu/publish.ts` | The publishing itself: the credentials, the document's life — create or rebuild, title, blocks, images, public sharing, owner, groups — and the answer it gives. A rebuild is checked against the document's member list, so only a document the application created may be cleared |
+| `src/feishu/client.ts` | The Feishu OpenAPI calls the publishing uses, each with the pitfall it has |
+| `src/feishu/markdown.ts` | The Markdown the publishing reads: the parser, the blocks it makes, and the preparation that turns a note into something a Feishu document can show |
+| `src/feishu/desk-store.ts` | The desk's memory of which document it published for which file, kept in a JSON file so the link survives a restart, and the registry of the documents it published at all — the gate a rebuild has to pass |
+| `src/feishu/desk.ts` | The publishing desk's file side: the roots the panel may open, the Markdown files of one root, reading and writing one, and the preview of what publishing would make of it. A path that leaves its root through a symbolic link is refused |
+| `src/feishu/desk-http.ts` | The desk's routes, which answer the panel only from this machine and only with the panel's own header; the batch route publishes several documents at once, a failure not stopping the others. The routes keep the map of what they published, so the panel cannot name a document to rebuild |
+| `src/client/index.tsx` | The client plugin entry: the sidebar entries (Superagent and the publishing desk beside it), the main panels behind them, and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
 | `src/client/api.ts` | Calls and polls of the management API, typed by `src/app/api.ts`, and the Decision filters of the Eval status |
@@ -394,10 +401,12 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/markdown.ts` | The Markdown subset of reports and questions, and the bare addresses in messages, as blocks and inline parts |
 | `src/client/text.ts` | Copy by key and the wording of domain values, reasons, senders and times |
 | `src/client/marks.ts` | The marks of the states the views classify: a Ticket's or a Thread's stage, a Source's state and a Decision's outcome, each as a dot, an icon, a tone and a label |
+| `src/client/desk.tsx` | The publishing desk: the files of a directory, the open document in preview or edit, and the button that publishes it to Feishu. It is a panel of its own, so the sidebar opens it directly, and a tab of the Superagent panel |
+| `src/client/desk-api.ts` | The desk's calls from the panel, typed and localized |
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled.
+`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. `src/feishu-publish.ts` is the entry of the publishing plugin, exported as `./feishu-publish`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu and the publishing disabled.
 
 ## Tests
 
@@ -410,6 +419,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
+| `tests/feishu-desk.spec.ts` | The publishing desk: the files it may open, the preview it shows, the routes the panel calls, and the memory of what it published |
+| `tests/feishu-publish.spec.ts` | The Markdown the publishing reads and the blocks it makes, the preparation that makes a note readable in Feishu, and the publishing plugin: the tool it puts on an agent, the skill it registers, and the fence its configuration draws around both |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |
 | `tests/assessment.spec.ts` | What the MasterAssessor keeps per Eval, and when it lets go |
 | `tests/background.spec.ts` | Waiting for a worker's shell jobs and subagents: an end that woke it, and a host that stops |
@@ -440,6 +451,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/client.spec.tsx`, `tests/navigation.spec.ts`, `tests/controls.spec.tsx` | The client plugin's registration and polling, Session navigation and route memory, the local controls, and the panel's imports, which have no cycle |
 | `tests/panel-overview.spec.tsx`, `panel-source.spec.tsx`, `panel-trigger.spec.tsx`, `panel-eval.spec.tsx`, `panel-execution.spec.tsx` | Each page of the panel, against a fake management API answered by route |
 | `tests/panel-settings.spec.tsx`, `panel-prompts.spec.tsx`, `panel-deployment.spec.tsx`, `panel-panel.spec.tsx` | The settings groups, drafts and history, the prompts, the Deployment page, and the panel's search, glossary and route memory |
+| `tests/panel-desk.spec.tsx` | The Desk tab: the files it lists, the document it opens, and the publication it starts |
 | `tests/draft.spec.ts`, `tests/prompt-config.spec.ts`, `tests/markdown.spec.ts`, `tests/marks.spec.ts` | Draft states, merges and the save bar's line; the prompt configuration by section and the line diff; the Markdown subset and its links; the mark of every state the views classify |
 | `tests/locales.spec.ts`, `tests/styles.spec.ts` | The copy in both languages, the stylesheet |
 | `tests/class-docs.spec.ts` | Every class in `src` has a JSDoc block before it |

@@ -90,6 +90,10 @@ Run the profile-creation command only for a new installation. If the profile alr
 
 Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, also enable the `dsh-superagent-feishu` entry there. The `webserver` entry sets the panel's port.
 
+The `dsh-superagent-feishu-publish` entry is optional and independent of the Feishu Source: it publishes a Markdown file as a document anyone with the link can read, with the personal tenant's application whose credentials are in `~/.config/feishu-profiles.json`. Its `chatIds` list decides which groups may be told about a published document; an empty list means no group is told. A document published this way is public on the internet, so enable the entry only where that is wanted.
+
+The same entry carries the publishing desk the panel's **Desk** tab uses: `roots` lists the directories whose Markdown files a person may read, change and publish; `desk: false` removes the tab's routes entirely. The desk's routes answer only the panel on this machine, and every path is locked inside a root — a symbolic link out of it is refused too — so it cannot be used to read or write anything else. The desk publishes with the configuration's own settings: the panel cannot make a document more public than `publish` allows, and no group is told. The desk remembers which document it published for which file in `deskStoreFile` (by default `~/.config/feishu-publish-desk.json`), so publishing the same file again rebuilds the same document and keeps its link; the panel cannot name a document of its own.
+
 | Key | Required | Meaning |
 | --- | --- | --- |
 | `stateDir` | yes | Absolute path: the database, the lock, the command shims in `worker-bin`, the agent's git configuration and, by default, the Ticket directories in `work`. Back it up before upgrades |

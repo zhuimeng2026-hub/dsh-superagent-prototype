@@ -12,7 +12,7 @@ Opening the panel answers three questions, in this order:
 
 ## Tabs
 
-The tabs follow the workflow: **Overview**, **Source**, **Trigger**, **Eval**, **Execution**, and **Settings**. Until repository and account setup succeeds, Overview shows what is missing and links to the relevant setting.
+The tabs follow the workflow: **Overview**, **Source**, **Trigger**, **Eval**, **Execution**, **Desk**, and **Settings**. Until repository and account setup succeeds, Overview shows what is missing and links to the relevant setting.
 
 | Tab | Shows |
 | --- | --- |
@@ -21,7 +21,12 @@ The tabs follow the workflow: **Overview**, **Source**, **Trigger**, **Eval**, *
 | Trigger | Threads filtered by Subscribed, Evaluating, New Triggers in 24 h, or All Threads. Each Thread shows its Triggers newest first, Decisions and Subscriptions |
 | Eval | Decisions with their reason and matched rules |
 | Execution | Executor state, Pause processing, and Tickets filtered by Open, Pending, Working, Waiting for a Trigger or Ended. Ticket details show actions, authorization, waiting Inputs, Subscriptions and Assignments |
+| Desk | The Markdown files of a directory the publishing plugin may open. One is open on the right in preview or in edit; **Publish to Feishu** sends it to the personal tenant as a document anyone with the link can read, owned by you. A second publication of the same document rebuilds it, so the link stays — the desk remembers which document belongs to which file, so this survives a restart. Ticking several documents and pressing **Publish the selected in parallel** sends them all at once, and each one's link or failure is listed |
 | Settings | Sources, Eval, Execution, Prompts and Deployment. Each group includes its save history |
+
+The sidebar carries **Superagent**, which holds the tabs above, and **Desk** beside it, which opens the
+publishing desk on its own. The desk is the same page in both places: the tab inside Superagent, and the
+sidebar row that leads straight to it.
 
 ### Reading individual records
 

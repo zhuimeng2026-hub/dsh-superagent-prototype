@@ -10,3 +10,14 @@
 # Feishu is optional: uncomment to enable its Source, then set the bot's lark-cli on the Feishu Source.
 # - id: dsh-superagent-feishu
 #   disabled: false
+# Publishing to Feishu is optional too, and independent of the Source: the plugin turns a Markdown
+# file into a document anyone with the link can read. It publishes with the personal tenant's
+# application, whose credentials are in ~/.config/feishu-profiles.json. chatIds decides which groups
+# may be told about a document; an empty list means no group is told. roots lists the directories
+# the panel's Desk tab may open, read, change and publish; desk: false removes the tab's routes.
+# - id: dsh-superagent-feishu-publish
+#   disabled: false
+#   config:
+#     profile: personal
+#     roots:
+#       - /absolute/path/to/your/notes

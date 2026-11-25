@@ -380,3 +380,16 @@ a.dt-btn, a.dt-btn:hover { text-decoration: none; }
 .dt-admission-slot { display: inline-flex; flex: none; width: 16px; }
 .dt-info-warn { color: var(--dsw-alias-state-warn-primary); }
 .dt-field-segmented { max-width: 240px; }
+/* The publishing desk: the files of a directory on the left, the open document on the right. */
+.dt-desk { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 24px; align-items: start; }
+.dt-desk-side { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dt-desk-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.dt-desk-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.dt-desk-actions { margin-top: 4px; }
+.dt-desk-editor { min-height: 360px; font-family: var(--ds-font-family-code, Menlo, monospace); }
+.dt-desk-tick { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.dt-desk-filter { box-sizing: border-box; width: 100%; min-width: 0; height: 32px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: 8px; padding: 0 8px; font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1, transparent); }
+.dt-desk-filter:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+@container (max-width: 720px) {
+  .dt-desk { grid-template-columns: minmax(0, 1fr); }
+}
