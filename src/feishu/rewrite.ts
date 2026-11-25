@@ -16,6 +16,7 @@
 
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { readFile, readdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -71,6 +72,8 @@ export const META_SUFFIX = '.飞书版.meta.json'
 const CODE_EXTENSIONS = new Set(['.py', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.rs', '.java', '.rb', '.php'])
 const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build', 'lib', '.next', '.cache', 'vendor', 'target', 'site-packages'])
 const MAX_CODE_FILES = 800
+/** 依赖声明最多看多少个：一个仓库里通常只有两三个。 */
+const MAX_MANIFESTS = 40
 const MAX_DEPTH = 5
 /** 事实太多会把提示词撑爆，也说明这份文档本来就不该讲这些。 */
 export const MAX_FACTS = 160
@@ -82,7 +85,6 @@ const JS_ENV = [/process\.env\.([A-Z][A-Z0-9_]{2,})/g, /process\.env\[["']([A-Z]
 const BASH_FENCE = /```(?:bash|sh|shell|console)\n([\s\S]*?)```/g
 /** 行内代码里像命令的：`pip install -r requirements.txt`。 */
 const INLINE_COMMAND = /`([a-z][\w.\-]*(?:\/[\w.\-]+)*[^`\n]{2,80})`/g
-const REQUIREMENT = /^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*(?:([=<>!~]=?|===)\s*([\w.\*+-]+))?$/
 
 /** 跑一条 git 命令；不是仓库或者没有 git，就当没有。 */
 async function git(root: string, args: string[]): Promise<string | undefined> {
@@ -111,6 +113,38 @@ export async function codeBaseline(repo: string): Promise<string | undefined> {
   return date ? `${repo} @ ${commit}（${date.slice(0, 10)}）` : `${repo} @ ${commit}`
 }
 
+/** 依赖声明的文件名。 */
+const MANIFESTS = new Set(['requirements.txt', 'package.json', 'pyproject.toml'])
+
+/**
+ * 仓库里的依赖声明。
+ *
+ * 单独走一遍，不跟代码文件抢名额：代码文件有上限（几百个），大仓库里光
+ * 一个子目录就把它占满了，根目录的 `pyproject.toml` 反而读不到——于是后端
+ * 依赖一条都没进事实。
+ */
+async function listManifests(root: string): Promise<string[]> {
+  const files: string[] = []
+  const walk = async (directory: string, depth: number): Promise<void> => {
+    if (depth > MAX_DEPTH || files.length >= MAX_MANIFESTS) return
+    let entries
+    try { entries = await readdir(directory, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (files.length >= MAX_MANIFESTS) return
+      if (entry.name.startsWith('.')) continue
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        if (SKIP_DIRECTORIES.has(entry.name)) continue
+        await walk(path, depth + 1)
+        continue
+      }
+      if (entry.isFile() && MANIFESTS.has(entry.name)) files.push(path)
+    }
+  }
+  await walk(root, 0)
+  return files
+}
+
 /** 仓库里的代码文件，不含依赖与构建产物。 */
 async function listCodeFiles(root: string): Promise<string[]> {
   const files: string[] = []
@@ -128,10 +162,7 @@ async function listCodeFiles(root: string): Promise<string[]> {
         continue
       }
       if (!entry.isFile()) continue
-      if (entry.name === 'requirements.txt' || entry.name === 'package.json' || entry.name === 'pyproject.toml') {
-        files.push(path)
-        continue
-      }
+      if (MANIFESTS.has(entry.name)) continue
       if (CODE_EXTENSIONS.has(extname(entry.name))) files.push(path)
     }
   }
@@ -139,27 +170,84 @@ async function listCodeFiles(root: string): Promise<string[]> {
   return files
 }
 
-/** 从依赖声明里取依赖。 */
-function dependenciesOf(name: string, text: string): Fact[] {
+/** 一条依赖声明：名字，后面可能带 extras 和版本约束。 */
+const DEP_SPEC = /^([A-Za-z0-9][A-Za-z0-9_.\-]*)\s*(?:\[[^\]]*\])?\s*(.*)$/
+
+/**
+ * 一条依赖的事实。
+ *
+ * 版本约束的符号要留着：`>=0.110` 是「至少 0.110」，写成「0.110」就成了
+ * 「锁死在 0.110」，是另一回事。多个约束（`>=2.6,<2.14`）也照原样留着。
+ * 直接引用（`pkg @ https://…`）没有版本，不算依赖事实。
+ */
+function dependencyOf(spec: string): Fact | undefined {
+  const match = DEP_SPEC.exec(spec.trim())
+  if (!match) return undefined
+  const key = match[1]!
+  const rest = match[2]!.split('#')[0]!.split(';')[0]!.trim()
+  if (!rest) return { id: `dep:${key}`, kind: 'dependency', value: key }
+  if (!/^[<>=!~]/.test(rest)) return undefined
+  return { id: `dep:${key}`, kind: 'dependency', value: `${key} ${rest}` }
+}
+
+/**
+ * 从 `pyproject.toml` 的 `[project]` 段取依赖。
+ *
+ * PEP 621 把依赖写成数组：`dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.30"]`。
+ * 行式的解析器读不懂这种格式——之前 Octop 的后端依赖一条都没进事实，文档里
+ * 只剩前端那批。
+ */
+function pyprojectDependencies(text: string): Fact[] {
+  const facts: Fact[] = []
+  const section = /^\[project\](?:(?!^\[)[\s\S])*?^dependencies\s*=\s*\[([\s\S]*?)\]\s*$/m.exec(text)
+  if (!section) return facts
+  const items = section[1]!.match(/"([^"]+)"|'([^']+)'/g) ?? []
+  for (const item of items) {
+    const fact = dependencyOf(item.slice(1, -1))
+    if (fact) facts.push(fact)
+  }
+  return facts
+}
+
+/** 锁文件里装出来的版本；没有就是没装。 */
+function installedVersion(lock: string, name: string): string | undefined {
+  try {
+    const value = JSON.parse(lock) as { packages?: Record<string, { version?: string }> }
+    return value.packages?.[`node_modules/${name}`]?.version
+  } catch { return undefined }
+}
+
+/**
+ * 从依赖声明里取依赖。
+ *
+ * npm 的包里，若旁边有 `package-lock.json`，写**装出来的版本**并把声明的区间
+ * 带上：文档里写「5.29.1」而实际装的是「5.29.3」，读者会以为装的是前者。
+ */
+function dependenciesOf(name: string, text: string, directory: string): Fact[] {
   const facts: Fact[] = []
   if (name === 'package.json') {
     let value: { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string> }
     try { value = JSON.parse(text) as typeof value } catch { return facts }
+    let lock: string | undefined
+    try { lock = readFileSync(join(directory, 'package-lock.json'), 'utf-8') } catch { lock = undefined }
     for (const group of [value.dependencies, value.devDependencies, value.peerDependencies]) {
       for (const [key, version] of Object.entries(group ?? {})) {
-        facts.push({ id: `dep:${key}`, kind: 'dependency', value: `${key} ${version}`.trim() })
+        const installed = lock ? installedVersion(lock, key) : undefined
+        facts.push({
+          id: `dep:${key}`,
+          kind: 'dependency',
+          value: installed ? `${key} ${installed}（声明 ${version}）` : `${key} ${version}`.trim(),
+        })
       }
     }
     return facts
   }
+  if (name === 'pyproject.toml') return pyprojectDependencies(text)
   for (const raw of text.split('\n')) {
     const line = raw.trim()
     if (!line || line.startsWith('#') || line.startsWith('-')) continue
-    const match = REQUIREMENT.exec(line)
-    if (!match) continue
-    const key = match[1]!
-    const version = match[3]
-    facts.push({ id: `dep:${key}`, kind: 'dependency', value: version ? `${key} ${version}` : key })
+    const fact = dependencyOf(line)
+    if (fact) facts.push(fact)
   }
   return facts
 }
@@ -174,14 +262,19 @@ export async function extractFacts(repo: string, source: string): Promise<Fact[]
   const facts = new Map<string, Fact>()
   const add = (fact: Fact): void => { if (!facts.has(fact.id)) facts.set(fact.id, fact) }
 
+  // 依赖先抽：它们在仓库的哪儿都要算数，不能被代码文件的名额挤掉。
+  for (const path of await listManifests(repo)) {
+    let text: string
+    try { text = await readFile(path, 'utf-8') } catch { continue }
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    for (const fact of dependenciesOf(name, text, dirname(path))) add(fact)
+  }
+
   for (const path of await listCodeFiles(repo)) {
     let text: string
     try { text = await readFile(path, 'utf-8') } catch { continue }
     const name = path.slice(path.lastIndexOf('/') + 1)
-    if (name === 'requirements.txt' || name === 'package.json' || name === 'pyproject.toml') {
-      for (const fact of dependenciesOf(name, text)) add(fact)
-      continue
-    }
+    if (MANIFESTS.has(name)) continue
     for (const pattern of [PY_ROUTE, JS_ROUTE]) {
       pattern.lastIndex = 0
       let match: RegExpExecArray | null
@@ -306,6 +399,21 @@ export function buildDocument(sections: readonly DraftSection[]): string {
  * 两种理由：这节记着的事实变了；或者变化的事实的字面出现在这节里
  * ——后者兜住「模型记错了事实的归属」这种情况。
  */
+/**
+ * 事实变了，哪几节要重写。
+ *
+ * 先看节的「事实归属」——上一版写这节时用了哪几条事实，那几条变了，这节就
+ * 过期了。再兜一层：事实的**种类**落在哪一节里是模板定死的（依赖在「相关」，
+ * 接口、命令、环境变量在「怎么用」），所以新加一条依赖也会把「相关」带出来
+ * ——不然清单里就少了一条，而正文里那个包名根本不会出现，靠字符串匹配找不到。
+ */
+const KIND_SECTIONS: Record<string, readonly string[]> = {
+  dependency: ['notes'],
+  route: ['howto'],
+  env: ['howto'],
+  command: ['howto'],
+}
+
 export function affectedSections(
   sections: readonly DraftSection[],
   changed: readonly Fact[],
@@ -314,9 +422,22 @@ export function affectedSections(
   if (sourceChanged) return sections.map(section => section.id)
   const ids = new Set(changed.map(fact => fact.id))
   const values = changed.map(fact => fact.value).filter(value => value.length >= 4)
+  // 事实 id 的后一半是它说的那个东西（包名、接口路径、变量名）。
+  const stems = changed
+    .map(fact => fact.id.slice(fact.id.indexOf(':') + 1))
+    .filter(stem => stem.length >= 3)
+  // 已经写进某节的事实，按那一节的归属算；没人写过的，才按种类兜底。
+  const bound = new Set(sections.flatMap(section => section.facts))
+  const byKind = new Set<string>()
+  for (const fact of changed) {
+    if (bound.has(fact.id)) continue
+    for (const id of KIND_SECTIONS[fact.kind] ?? []) byKind.add(id)
+  }
   return sections.filter(section => {
     if (section.facts.some(id => ids.has(id))) return true
-    return values.some(value => section.body.includes(value))
+    if (byKind.has(section.id)) return true
+    if (values.some(value => section.body.includes(value))) return true
+    return stems.some(stem => section.body.toLowerCase().includes(stem.toLowerCase()))
   }).map(section => section.id)
 }
 
@@ -349,6 +470,9 @@ const SYSTEM_PROMPT = [
   '- 不写本机绝对路径、端口、内网地址、账号口令。',
   '- 不写给开发者或模型的指令（例如「必须」「不要只写计划」「给 ClaudeCode」「Read this PRD」这一类段落一律不进正文）。',
   '- 每一个数字、命令、接口都必须来自「事实」或「原文」，不许自己编；确实不确定的写「待核实」。',
+  '- 依赖事实可能写成「包名 版本（声明 区间）」：写实际装着的那个版本。',
+  '- 依赖事实里带版本约束（>=、< 这类符号）时，约束要照抄，不能只写一个数字：'
+    + '「fastapi >=0.100.0」是「至少 0.100.0」，写成「0.100.0」就变成了「锁死在 0.100.0」。',
   '- 不要写生成日期。',
   '- facts 写这一节用到了哪些事实的 id。',
 ].join('\n')

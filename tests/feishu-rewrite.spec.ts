@@ -80,7 +80,7 @@ it('takes the facts from the code, not from the prose', async () => {
   expect(ids).toContain('env:DATABASE_URL')
   expect(ids).toContain('cmd:pip install -r requirements.txt')
   // The version is part of the fact: a new version is a changed fact.
-  expect(facts.find(fact => fact.id === 'dep:fastapi')?.value).toBe('fastapi 0.115.0')
+  expect(facts.find(fact => fact.id === 'dep:fastapi')?.value).toBe('fastapi ==0.115.0')
 })
 
 it('sees a changed version and a removed route as changed facts', () => {
@@ -223,4 +223,84 @@ it('keeps the frontmatter out of the model, and out of the hash', async () => {
   expect((await rewriteDocument({ file: source, model, repo: root })).upToDate).toBe(true)
   await writeFile(source, withNote('https://my.feishu.cn/docx/xyz'), 'utf-8')
   expect((await rewriteDocument({ file: source, model, repo: root })).upToDate).toBe(true)
+})
+
+it('writes the version that is installed, not only the range', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rewrite-'))
+  await mkdir(join(root, 'app'), { recursive: true })
+  await writeFile(join(root, 'package.json'), JSON.stringify({ dependencies: { antd: '^5.29.1' } }), 'utf-8')
+  await writeFile(join(root, 'package-lock.json'), JSON.stringify({
+    packages: { 'node_modules/antd': { version: '5.29.3' } },
+  }), 'utf-8')
+  await writeFile(join(root, 'PRD.md'), SOURCE, 'utf-8')
+  const facts = await extractFacts(root, SOURCE)
+  expect(facts.find(fact => fact.id === 'dep:antd')?.value).toBe('antd 5.29.3（声明 ^5.29.1）')
+})
+
+it('takes the Python dependencies out of a pyproject.toml', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rewrite-'))
+  await writeFile(join(root, 'pyproject.toml'), [
+    '[project]',
+    'name = "thing"',
+    'dependencies = [',
+    '  "fastapi>=0.110",',
+    '  "uvicorn[standard]>=0.30",',
+    ']',
+    '',
+    '[tool.other]',
+    'dependencies = ["not-a-dependency"]',
+  ].join('\n'), 'utf-8')
+  await writeFile(join(root, 'PRD.md'), SOURCE, 'utf-8')
+  const facts = await extractFacts(root, SOURCE)
+  expect(facts.find(fact => fact.id === 'dep:fastapi')?.value).toBe('fastapi >=0.110')
+  expect(facts.find(fact => fact.id === 'dep:uvicorn')?.value).toBe('uvicorn >=0.30')
+  expect(facts.some(fact => fact.id === 'dep:not-a-dependency')).toBe(false)
+})
+
+it('rewrites the related section when a dependency is added', () => {
+  const sections = [
+    { id: 'lead', title: 't', body: '一句话', facts: [] },
+    { id: 'howto', title: 't', body: '装依赖，起服务', facts: [] },
+    { id: 'notes', title: 't', body: '依赖：antd、fastapi', facts: ['dep:antd'] },
+  ]
+  // A dependency nobody used before: its name is nowhere in the body, so only
+  // the kind of the fact can tell that the related section is out of date.
+  const added: Fact[] = [{ id: 'dep:uvicorn', kind: 'dependency', value: 'uvicorn 0.30' }]
+  expect(affectedSections(sections, added, false)).toEqual(['notes'])
+  // An interface that is not mentioned anywhere still belongs to the how-to section.
+  const route: Fact[] = [{ id: 'route:GET /health', kind: 'route', value: 'GET /health' }]
+  expect(affectedSections(sections, route, false)).toEqual(['howto'])
+})
+
+it('takes a dependency with several constraints, and keeps the operators', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rewrite-'))
+  await writeFile(join(root, 'requirements.txt'), [
+    'fastapi==0.115.0',
+    'pydantic>=2.6,<2.14',
+    'uvicorn[standard]>=0.27',
+    'rich>=13.7',
+    '# 注释不算依赖',
+    '-e .',
+  ].join('\n'), 'utf-8')
+  await writeFile(join(root, 'PRD.md'), SOURCE, 'utf-8')
+  const facts = await extractFacts(root, SOURCE)
+  const value = (id: string) => facts.find(fact => fact.id === id)?.value
+  expect(value('dep:fastapi')).toBe('fastapi ==0.115.0')
+  expect(value('dep:pydantic')).toBe('pydantic >=2.6,<2.14')
+  expect(value('dep:uvicorn')).toBe('uvicorn >=0.27')
+  expect(value('dep:rich')).toBe('rich >=13.7')
+})
+
+it('reads the dependencies even when the code files take all the room', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rewrite-'))
+  // A big subdirectory that sorts before the manifest: the old walk filled its
+  // quota with these and never reached the root's pyproject.toml.
+  const crowd = join(root, 'a-code')
+  await mkdir(crowd, { recursive: true })
+  await Promise.all(Array.from({ length: 810 }, (_, index) =>
+    writeFile(join(crowd, `m${index}.py`), 'x = 1\n', 'utf-8')))
+  await writeFile(join(root, 'pyproject.toml'), '[project]\ndependencies = ["fastapi>=0.110"]\n', 'utf-8')
+  await writeFile(join(root, 'PRD.md'), SOURCE, 'utf-8')
+  const facts = await extractFacts(root, SOURCE)
+  expect(facts.find(fact => fact.id === 'dep:fastapi')?.value).toBe('fastapi >=0.110')
 })
