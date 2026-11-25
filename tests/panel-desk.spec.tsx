@@ -33,6 +33,9 @@ function deskRoutes(): void {
       modified: '2026-11-20T10:00:00.000Z' })
     if (path === 'file') return json({ root: ROOT, path: DOC, bytes: CONTENT.length, modified: '2026-11-20T10:00:00.000Z' })
     if (path === 'preview') return json({ blocks: 2, text: CONTENT, before: 3, after: 3 })
+    if (path === 'rewrite') return json({ root: ROOT, output: 'PRD.飞书版.md', changed: ['lead', 'howto'],
+      text: '# 企业标书评分\n\n一句话说清这是什么。\n', problems: [], facts: [], baseline: '/opt/proposal-rule @ 42edc90',
+      upToDate: false })
     if (path === 'publish') {
       published.add(DOC)
       return json({ doc_url: 'https://my.feishu.cn/docx/d1', doc_id: 'd1', title: '标题', blocks: 2, contentBlocks: 1,
@@ -76,4 +79,19 @@ it('publishes the ticked documents in one batch', async () => {
   await click(find(zh.deskPublishSelected))
   const batch = calls.find(call => call.path === 'publish-many')
   expect(batch).toMatchObject({ method: 'POST', body: { root: ROOT, paths: [DOC] } })
+})
+
+it('writes a plain-language version beside the document, and shows what it wrote', async () => {
+  deskRoutes()
+  await mount()
+  await click(tab(zh['tab.desk']))
+  await find(DOC, '.dt-open')
+  await click(find(DOC))
+  await click(find(zh.deskRewrite))
+  const rewrite = calls.find(call => call.path === 'rewrite')
+  expect(rewrite).toMatchObject({ method: 'POST', body: { root: ROOT, path: DOC } })
+  // The draft is shown before it is published: publishing is the part that cannot be taken back.
+  expect(text()).toContain('企业标书评分')
+  expect(text()).toContain('一句话说清这是什么。')
+  expect(find(zh.deskRewriteOpen)).toBeTruthy()
 })

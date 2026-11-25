@@ -782,6 +782,14 @@ const TEXT = {
   deskBlocks: ['{before} 行 → {blocks} 个块', '{before} lines → {blocks} blocks'],
   deskCut: ['发布时会从配置的标记处截断，预览与实际发布一致',
     'Publishing cuts the text at the configured markers; the preview is what publishing makes'],
+  // Rewriting: the panel turns a technical document into a plain-language version next to it.
+  deskRewrite: ['生成飞书版', 'Plain-language version'],
+  deskRewriting: ['正在改写…', 'Rewriting…'],
+  deskRewriteDone: ['已写入 {file}，重写了 {count} 节', 'Wrote {file}, {count} sections rewritten'],
+  deskRewriteUpToDate: ['事实没有变化，这一版不用改', 'Nothing changed; this version needs no rewriting'],
+  deskRewriteProblems: ['这份稿子有问题，没有写入：{problems}', 'The draft has problems and was not written: {problems}'],
+  deskRewriteOpen: ['打开生成的文档', 'Open the generated document'],
+  deskRewriteBaseline: ['事实基线：{baseline}', 'Fact baseline: {baseline}'],
 } as const satisfies Record<string, readonly [string, string]>
 export type DshSuperagentKey = keyof typeof TEXT
 const language = (index: 0 | 1) => Object.fromEntries(Object.entries(TEXT).map(([key, pair]) => [key, pair[index]])) as Record<DshSuperagentKey, string>

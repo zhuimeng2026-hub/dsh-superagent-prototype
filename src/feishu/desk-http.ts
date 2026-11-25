@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { DeskError, deskRelative, deskRoots, listDeskFiles, previewDeskContent, readDeskFile, resolveDeskPath, writeDeskFile, type DeskRoot } from './desk.ts'
 import type { DeskStore } from './desk-store.ts'
 import type { PublishResult } from './publish.ts'
+import type { RewriteResult } from './rewrite.ts'
 
 /** 面板请求要带的标记头，值固定为 `1`。 */
 export const DESK_HEADER = 'x-publish-desk'
@@ -35,6 +36,8 @@ export interface DeskHost {
   cut(): readonly string[]
   /** 记住哪篇文件发到了哪一篇文档。 */
   store(): DeskStore
+  /** 把一份文档改写成通俗版，产物写在它旁边。宿主不做这件事时就没有它。 */
+  rewrite?(input: { file: string; force?: boolean }): Promise<RewriteResult>
 }
 
 const FileQuery = z.object({ root: z.string().min(1), path: z.string().min(1) })
@@ -48,6 +51,11 @@ const PublishBody = z.object({
 const PublishManyBody = z.object({
   root: z.string().min(1),
   paths: z.array(z.string().min(1)).min(1).max(50),
+})
+const RewriteBody = z.object({
+  root: z.string().min(1),
+  path: z.string().min(1),
+  force: z.boolean().optional(),
 })
 
 /** 一次最多同时发几篇文档。飞书的接口按篇计费，太多并发只会互相拖慢。 */
@@ -100,6 +108,17 @@ export function deskRoutes(host: DeskHost): Record<string, Route> {
       const parsed = PreviewBody.parse(await body(MAX_BODY))
       // 与真正发布走同一份截断标记，所以预览就是飞书上会看到的。
       return previewDeskContent(parsed.content, host.cut())
+    },
+    // 把一篇文档改写成通俗版。产物写在原文旁边，所以它也在根目录里，可以直接发布。
+    'POST rewrite': async ({ body }) => {
+      const parsed = RewriteBody.parse(await body(MAX_BODY))
+      const root = rootOf(parsed.root)
+      if (!host.rewrite) throw new DeskError(400, '这个插件没有开启改写')
+      const file = resolveDeskPath(root.path, parsed.path)
+      await readDeskFile(root.path, parsed.path)
+      const result = await host.rewrite({ file, force: parsed.force })
+      // 产物在根目录里，用相对路径回去，面板才能直接打开它。
+      return { root: root.path, ...result, output: deskRelative(root.path, result.output) }
     },
     // Several documents publish at once, each in its own turn of the pool; one failure does not stop the others.
     'POST publish-many': async ({ body }) => {

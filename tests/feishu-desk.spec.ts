@@ -210,3 +210,21 @@ it('takes the panel\'s requests only from this machine', () => {
   expect(sameDeskOrigin({ headers: { host: 'evil.example:3082', 'x-publish-desk': '1' } }, 3082)).toBe(false)
   expect(sameDeskOrigin({ headers: { host: '127.0.0.1:3082' } }, 3082)).toBe(false)
 })
+
+it('rewrites a document of a root, and answers with the product beside it', async () => {
+  const root = workspace()
+  const rewrite = vi.fn(async (input: { file: string; force?: boolean }) => ({
+    output: join(root, 'a.飞书版.md'), changed: ['lead'], text: '# 甲\n', problems: [], facts: [],
+    baseline: '/opt/thing @ 1', upToDate: false,
+  }))
+  const routes = deskRoutes({ roots: () => deskRoots([root], root), publish: vi.fn(), port: () => 3082, cut: () => [],
+    store: () => memoryDeskStore(), rewrite })
+  type Call = { query: Record<string, string | undefined>; body: (maxBytes?: number) => Promise<unknown> }
+  const route = routes['POST rewrite'] as (call: Call) => Promise<{ output: string; changed: string[] }>
+  const answer = await route({ query: {}, body: async () => ({ root, path: 'a.md' }) })
+  expect(rewrite).toHaveBeenCalledWith(expect.objectContaining({ file: join(root, 'a.md') }))
+  // The product is named the way the list names it, so the panel can open it.
+  expect(answer.output).toBe('a.飞书版.md')
+  expect(answer.changed).toEqual(['lead'])
+  await expect(route({ query: {}, body: async () => ({ root, path: '../escape.md' }) })).rejects.toThrow(DeskError)
+})

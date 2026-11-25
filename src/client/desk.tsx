@@ -1,7 +1,7 @@
 /** The publishing desk: the Markdown documents of a configured directory, one of them open, and publishing it to Feishu. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Icon, Tag } from './controls.tsx'
-import { deskApi, type DeskApi, type DeskBatchItem, type DeskFile, type DeskPreview, type DeskResult, type DeskRoot } from './desk-api.ts'
+import { deskApi, type DeskApi, type DeskBatchItem, type DeskFile, type DeskPreview, type DeskResult, type DeskRewrite, type DeskRoot } from './desk-api.ts'
 import { usePanel } from './provider.tsx'
 import { errorText, fullTime, type T } from './text.ts'
 import { Hint, KeyValues, MarkdownLite, Section } from './widgets.tsx'
@@ -42,9 +42,11 @@ function FileList({ files, current, filter, selected, onFilter, onPick, onToggle
 }
 
 /** One open document: its text, its preview, and the actions that save or publish it. */
-function Editor({ root, file, api, onPublish }: {
+function Editor({ root, file, api, onPublish, onOpen, onRefresh }: {
   root: string; file: DeskFile; api: DeskApi
   onPublish: (path: string) => Promise<void>
+  onOpen: (path: string) => void
+  onRefresh: () => void
 }) {
   const { t, notify } = usePanel()
   const [content, setContent] = useState<string>()
@@ -52,7 +54,8 @@ function Editor({ root, file, api, onPublish }: {
   const [modified, setModified] = useState('')
   const [mode, setMode] = useState<Mode>('preview')
   const [preview, setPreview] = useState<DeskPreview>()
-  const [busy, setBusy] = useState<'save' | 'publish' | undefined>()
+  const [busy, setBusy] = useState<'save' | 'publish' | 'rewrite' | undefined>()
+  const [rewrite, setRewrite] = useState<DeskRewrite>()
   const dirty = content !== undefined && content !== saved
   const dirtyRef = useRef(dirty)
   dirtyRef.current = dirty
@@ -99,6 +102,24 @@ function Editor({ root, file, api, onPublish }: {
     } catch (failure) { notify(errorText(failure)) } finally { setBusy(undefined) }
   }
 
+  /**
+   * 把这篇文档改写成通俗版，产物写在它旁边。
+   *
+   * 改写是按节的：事实没变的节原样留着，所以改一次只动该动的地方。
+   */
+  const runRewrite = async () => {
+    setBusy('rewrite')
+    try {
+      const value = await api.rewrite(root, file.path)
+      setRewrite(value)
+      // The new document joins the list beside the one that was read.
+      onRefresh()
+      if (value.upToDate) notify(t('deskRewriteUpToDate'))
+      else if (value.problems.length) notify(t('deskRewriteProblems', { problems: value.problems.map(item => item.detail).join('、') }))
+      else notify(t('deskRewriteDone', { file: value.output, count: value.changed.length }))
+    } catch (failure) { notify(errorText(failure)) } finally { setBusy(undefined) }
+  }
+
   return <Section title={file.path} action={<div className="dt-actions">
     <Button variant={mode === 'edit' ? 'ghost' : 'outline'} size="sm" disabled={content === undefined}
       onClick={() => setMode(mode === 'edit' ? 'preview' : 'edit')}>{mode === 'edit' ? t('deskPreview') : t('deskEdit')}</Button>
@@ -116,10 +137,22 @@ function Editor({ root, file, api, onPublish }: {
     <div className="dt-actions dt-desk-actions">
       <Button variant="ghost" size="sm" disabled={!dirty || busy !== undefined} onClick={() => setContent(saved)}>{t('deskDiscard')}</Button>
       <Button variant="outline" size="sm" disabled={!dirty || busy !== undefined} onClick={() => { void save() }}>{t('deskSave')}</Button>
+      <Button variant="outline" size="sm" disabled={content === undefined || busy !== undefined} onClick={() => { void runRewrite() }}>
+        {busy === 'rewrite' ? t('deskRewriting') : t('deskRewrite')}</Button>
       <Button variant="primary" size="sm" icon={<Icon name="external" size={14} />} disabled={content === undefined || busy !== undefined}
         onClick={() => { void publish() }}>{busy === 'publish' ? t('deskPublishing')
           : file.doc_id ? t('deskPublishAgain') : t('deskPublish')}</Button>
     </div>
+    {rewrite && <div className="dt-desk-rewrite">
+      {rewrite.problems.length
+        ? <Hint>{t('deskRewriteProblems', { problems: rewrite.problems.map(item => item.detail).join('、') })}</Hint>
+        : <Hint>{rewrite.upToDate ? t('deskRewriteUpToDate') : t('deskRewriteDone', { file: rewrite.output, count: rewrite.changed.length })}</Hint>}
+      {rewrite.baseline && <p className="dt-hint dt-mono">{t('deskRewriteBaseline', { baseline: rewrite.baseline })}</p>}
+      {rewrite.text && <MarkdownLite text={rewrite.text} />}
+      {!rewrite.upToDate && !rewrite.problems.length && rewrite.output && <div className="dt-actions">
+        <Button variant="outline" size="sm" onClick={() => onOpen(rewrite.output)}>{t('deskRewriteOpen')}</Button>
+      </div>}
+    </div>}
     <Hint>{t('deskPublishHint')}</Hint>
   </Section>
 }
@@ -249,7 +282,8 @@ export function DeskPage() {
         </div>
       </div>
       <div className="dt-desk-main">
-        {file ? <Editor key={file.path} root={root} file={file} api={api} onPublish={publish} />
+        {file ? <Editor key={file.path} root={root} file={file} api={api} onPublish={publish}
+          onOpen={setPath} onRefresh={() => { void list(root) }} />
           : <Hint>{t('deskChooseFile')}</Hint>}
         {batch && <Section title={t('deskPublishSelected')} icon="external">
           <ul className="dt-list">{batch.map(item => <li key={item.path} className="dt-row">

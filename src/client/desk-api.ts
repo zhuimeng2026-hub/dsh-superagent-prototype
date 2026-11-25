@@ -10,6 +10,18 @@ export interface DeskPreview { blocks: number; text: string; before: number; aft
 export type DeskResult = PublishResult
 /** One document of a parallel batch: it published, or it says why it did not. */
 export type DeskBatchItem = { path: string; ok: true; result: DeskResult } | { path: string; ok: false; error: string }
+/** A fact the rewriting took from the code: a dependency, a route, an environment variable, a command. */
+export interface DeskFact { id: string; kind: string; value: string }
+/** What one rewriting did: which sections were written, and what the check found. */
+export interface DeskRewrite {
+  output: string
+  changed: string[]
+  text: string
+  problems: { kind: string; detail: string }[]
+  facts: DeskFact[]
+  baseline?: string
+  upToDate: boolean
+}
 
 /** The panel marks its own calls; the host answers only to them, and only from this machine. */
 const DESK_HEADER = 'x-publish-desk'
@@ -46,6 +58,8 @@ export const deskApi = (t: T) => ({
   write: (root: string, path: string, content: string) => call<{ root: string; path: string; bytes: number; modified: string }>(t,
     'file', 'PUT', { root, path, content }),
   preview: (content: string) => call<DeskPreview>(t, 'preview', 'POST', { content }),
+  rewrite: (root: string, path: string, force?: boolean) => call<DeskRewrite>(
+    t, 'rewrite', 'POST', { root, path, ...force === undefined ? {} : { force } }),
   publish: (root: string, path: string, title?: string) => call<DeskResult>(t, 'publish', 'POST', { root, path, title }),
   publishMany: (root: string, paths: string[]) => call<{ root: string; results: DeskBatchItem[] }>(
     t, 'publish-many', 'POST', { root, paths }),

@@ -381,6 +381,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/feishu/desk-store.ts` | The desk's memory of which document it published for which file, kept in a JSON file so the link survives a restart, and the registry of the documents it published at all — the gate a rebuild has to pass |
 | `src/feishu/desk.ts` | The publishing desk's file side: the roots the panel may open, the Markdown files of one root, reading and writing one, and the preview of what publishing would make of it. A path that leaves its root through a symbolic link is refused |
 | `src/feishu/desk-http.ts` | The desk's routes, which answer the panel only from this machine and only with the panel's own header; the batch route publishes several documents at once, a failure not stopping the others. The routes keep the map of what they published, so the panel cannot name a document to rebuild |
+| `src/feishu/rewrite.ts` | The plain-language version of a document: the facts taken from the code (dependencies, routes, environment variables, commands), the sections kept and rewritten, the model that writes the wording, and the check that refuses a draft with a secret, a password, an internal path or an unsourced number |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entries (Superagent and the publishing desk beside it), the main panels behind them, and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
@@ -401,7 +402,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/markdown.ts` | The Markdown subset of reports and questions, and the bare addresses in messages, as blocks and inline parts |
 | `src/client/text.ts` | Copy by key and the wording of domain values, reasons, senders and times |
 | `src/client/marks.ts` | The marks of the states the views classify: a Ticket's or a Thread's stage, a Source's state and a Decision's outcome, each as a dot, an icon, a tone and a label |
-| `src/client/desk.tsx` | The publishing desk: the files of a directory, the open document in preview or edit, and the button that publishes it to Feishu. It is a panel of its own, so the sidebar opens it directly, and a tab of the Superagent panel |
+| `src/client/desk.tsx` | The publishing desk: the files of a directory, the open document in preview or edit, the button that publishes it to Feishu, and the button that writes its plain-language version. It is a panel of its own, so the sidebar opens it directly, and a tab of the Superagent panel |
 | `src/client/desk-api.ts` | The desk's calls from the panel, typed and localized |
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
@@ -420,6 +421,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/feishu-desk.spec.ts` | The publishing desk: the files it may open, the preview it shows, the routes the panel calls, and the memory of what it published |
+| `tests/feishu-rewrite.spec.ts` | The plain-language version: the facts taken from the code, the sections a changed fact reaches, the sections kept, and the check that refuses a draft |
 | `tests/feishu-publish.spec.ts` | The Markdown the publishing reads and the blocks it makes, the preparation that makes a note readable in Feishu, and the publishing plugin: the tool it puts on an agent, the skill it registers, and the fence its configuration draws around both |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |
 | `tests/assessment.spec.ts` | What the MasterAssessor keeps per Eval, and when it lets go |

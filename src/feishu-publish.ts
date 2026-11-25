@@ -13,7 +13,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { readFileSync } from 'node:fs'
-import { extname, isAbsolute, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { extname, isAbsolute, join, resolve } from 'node:path'
 import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
 import { CUT_MARKERS } from './feishu/markdown.ts'
@@ -21,6 +23,7 @@ import { publish, resolveCredentials } from './feishu/publish.ts'
 import { registerDeskHttp } from './feishu/desk-http.ts'
 import { deskRelative, deskRoots, ensureInsideRoot } from './feishu/desk.ts'
 import { fileDeskStore } from './feishu/desk-store.ts'
+import { rewriteDocument } from './feishu/rewrite.ts'
 import { packagePath } from './infra/paths.ts'
 
 /** The name of the tool the plugin registers on every agent. */
@@ -53,6 +56,20 @@ export const Config = s.object({
     .description('Headings from which the tail of the Markdown is dropped before publishing; empty keeps the whole file.'),
   desk: s.boolean().default(true)
     .description('Whether the publishing desk answers the panel: it lists, reads, writes and publishes Markdown files.'),
+  rewrite: s.boolean().default(true)
+    .description('Whether the panel may turn a document into a plain-language version with a model, next to it as *.飞书版.md.'),
+  rewriteModel: s.string().default('group/dsh')
+    .description('The model that writes the plain-language version, named as the gateway knows it.'),
+  rewriteBaseUrl: s.string().default('http://127.0.0.1:3425/v1')
+    .description('The OpenAI-compatible gateway the rewriting model is reached at.'),
+  rewriteKeyEnv: s.string().default('MAGPIE_GATEWAY_KEY')
+    .description('The name of the key the gateway wants; taken from the process environment, or from the credentials file.'),
+  rewriteCredentials: s.string().default('')
+    .description('Where the key named by rewriteKeyEnv is looked up when the process has no such variable; empty means ~/.dsh/.credentials.yaml.'),
+  rewriteStyle: s.string().default('')
+    .description('A document whose style the plain-language version follows; empty means the previous version of the same document.'),
+  rewriteTimeoutMs: s.number().default(180000)
+    .description('Time limit of one rewriting, in milliseconds.'),
   roots: s.array(s.string()).default([])
     .description('The directories the desk may open; the working directory of the process is always one of them.'),
   deskStoreFile: s.string().default('')
@@ -80,6 +97,26 @@ function readSkill(): SkillText {
   const match = /^---\nname: ([^\n]+)\ndescription: ([^\n]+)\n---\n\n([\s\S]*)$/.exec(text)
   if (!match) throw new Error(`packaged skill ${SKILL_NAME} has no frontmatter`)
   return { name: match[1]!, description: match[2]!, content: match[3]! }
+}
+
+/**
+ * 找模型网关的钥匙。
+ *
+ * 先看进程的环境变量——那是最直接的。宿主没有这个变量时（DSH 的进程环境
+ * 是干净的），就从凭据文件的 `refs` 段里找：那里存着这台机器给各个网关
+ * 准备的钥匙，名字与变量名相同。
+ */
+export async function resolveGatewayKey(envName: string, credentialsFile: string): Promise<string> {
+  const fromEnv = process.env[envName]
+  if (fromEnv) return fromEnv
+  const file = credentialsFile || join(homedir(), '.dsh', '.credentials.yaml')
+  const raw = await readFile(file, 'utf-8').catch(() => undefined)
+  if (!raw) throw new Error(`没有 ${envName} 这个环境变量，也读不了凭据文件 ${file}`)
+  const block = /^refs:\n((?:[ \t]+.*\n?)*)/m.exec(raw)?.[1] ?? ''
+  const line = block.split('\n').find(item => item.trim().startsWith(`${envName}:`))
+  const value = line ? line.slice(line.indexOf(':') + 1).trim().replace(/^["']|["']$/g, '') : ''
+  if (!value) throw new Error(`凭据文件 ${file} 里没有 ${envName}`)
+  return value
 }
 
 /** Register the plugin: one tool on every agent, one skill for every session. */
@@ -185,6 +222,23 @@ export function apply(ctx: Context, config: PublishConfig): void {
         // The configuration is the fence: the panel cannot make a document more public than it is, and no group is told.
         cut: () => config.cutMarkers,
         store: () => store,
+        // 把一份文档改写成通俗版：事实由代码抽，文案由模型写，写完还有一道检查。
+        rewrite: async input => {
+          if (!config.rewrite) throw new Error('这个插件没有开启改写（配置里的 rewrite）')
+          const key = await resolveGatewayKey(config.rewriteKeyEnv, config.rewriteCredentials)
+          const style = config.rewriteStyle ? await readFile(config.rewriteStyle, 'utf-8').catch(() => undefined) : undefined
+          return rewriteDocument({
+            file: input.file,
+            style,
+            force: input.force,
+            model: {
+              baseUrl: config.rewriteBaseUrl,
+              apiKey: key,
+              model: config.rewriteModel,
+              timeoutMs: config.rewriteTimeoutMs,
+            },
+          })
+        },
         publish: async input => {
           const result = await publish({
             file: input.file,
