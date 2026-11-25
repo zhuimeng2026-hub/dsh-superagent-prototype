@@ -587,6 +587,19 @@ export function hashOf(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 16)
 }
 
+/**
+ * 去掉开头的 YAML frontmatter。
+ *
+ * frontmatter 是笔记自己的元数据（飞书链接、代码基线、标签），不是正文。
+ * 它会被发布脚本剥掉，所以改写时也不能把它当原文喂给模型——否则模型
+ * 可能把里面的链接抄进公开文档里。它也不该影响「源文件变了没有」的判断：
+ * 补一条链接不等于改了需求。
+ */
+export function stripFrontmatter(text: string): string {
+  const match = /^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/.exec(text)
+  return match ? text.slice(match[0].length) : text
+}
+
 /** 产物的路径：源文件旁边，同名的 `*.飞书版.md`。 */
 export function outputPathOf(source: string): string {
   const base = source.slice(0, source.length - extname(source).length)
@@ -628,7 +641,7 @@ export async function rewriteDocument(input: {
   /** 强制全部重写。 */
   force?: boolean
 }): Promise<RewriteResult> {
-  const source = await readFile(input.file, 'utf-8')
+  const source = stripFrontmatter(await readFile(input.file, 'utf-8'))
   const repo = input.repo ?? await repoRootOf(dirname(input.file))
   const facts = await extractFacts(repo, source)
   const baseline = await codeBaseline(repo)

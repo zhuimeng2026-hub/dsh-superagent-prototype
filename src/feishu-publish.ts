@@ -23,7 +23,7 @@ import { publish, resolveCredentials } from './feishu/publish.ts'
 import { registerDeskHttp } from './feishu/desk-http.ts'
 import { deskRelative, deskRoots, ensureInsideRoot } from './feishu/desk.ts'
 import { fileDeskStore } from './feishu/desk-store.ts'
-import { rewriteDocument } from './feishu/rewrite.ts'
+import { rewriteDocument, stripFrontmatter } from './feishu/rewrite.ts'
 import { packagePath } from './infra/paths.ts'
 
 /** The name of the tool the plugin registers on every agent. */
@@ -226,7 +226,9 @@ export function apply(ctx: Context, config: PublishConfig): void {
         rewrite: async input => {
           if (!config.rewrite) throw new Error('这个插件没有开启改写（配置里的 rewrite）')
           const key = await resolveGatewayKey(config.rewriteKeyEnv, config.rewriteCredentials)
-          const style = config.rewriteStyle ? await readFile(config.rewriteStyle, 'utf-8').catch(() => undefined) : undefined
+          const style = config.rewriteStyle
+            ? stripFrontmatter(await readFile(config.rewriteStyle, 'utf-8').catch(() => undefined) ?? '')
+            : undefined
           return rewriteDocument({
             file: input.file,
             style,

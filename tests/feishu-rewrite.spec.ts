@@ -209,3 +209,18 @@ it('takes the answer out of an answer that starts with the model thinking', () =
   ].join('\n')
   expect(parseDraft(answer)).toEqual([{ id: 'lead', title: 't', body: '真正的答案', facts: [] }])
 })
+
+it('keeps the frontmatter out of the model, and out of the hash', async () => {
+  const root = await workspace()
+  const source = join(root, 'PRD.md')
+  const withNote = (link: string) => `---\n飞书文档: ${link}\n---\n\n${SOURCE}`
+  await writeFile(source, withNote('https://my.feishu.cn/docx/abc'), 'utf-8')
+  const { model, asked } = answering(FULL)
+  await rewriteDocument({ file: source, model, repo: root })
+  // The metadata is not content: the model never sees the link.
+  expect(asked[0]).not.toContain('my.feishu.cn')
+  // And it does not count as a change of the source.
+  expect((await rewriteDocument({ file: source, model, repo: root })).upToDate).toBe(true)
+  await writeFile(source, withNote('https://my.feishu.cn/docx/xyz'), 'utf-8')
+  expect((await rewriteDocument({ file: source, model, repo: root })).upToDate).toBe(true)
+})
