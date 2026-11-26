@@ -10,17 +10,27 @@ function shortUrl(url: string): string {
     return `${parsed.host}${path === '/' ? '' : path}`
   } catch (error) { void error /* Not a URL after all; show it as written. */; return url }
 }
-/** Splits plain text into text and bare-URL link nodes, excluding trailing sentence punctuation from URLs. */
+/**
+ * Splits plain text into text and bare-URL link nodes, excluding trailing sentence punctuation from URLs.
+ *
+ * 尖括号不吞：`<https://x>` 里的 `>` 不属于链接，吞进去打不开。
+ * 中文标点与全角符号同理，地址止于「。」「）」之前。
+ */
 export function linkify(text: string): Inline[] {
-  return text.split(/(https?:\/\/[^\s)，。]*[^\s)，。.,;:!?'"])/).filter(Boolean).map((part): Inline => /^https?:\/\//.test(part)
+  return text.split(/(https?:\/\/[^\s\u3000-\u303F\uFF00-\uFFEF<>()]*[^\s\u3000-\u303F\uFF00-\uFFEF<>().,;:!?'"])/).filter(Boolean).map((part): Inline => /^https?:\/\//.test(part)
     ? { kind: 'link', text: shortUrl(part), url: part } : { kind: 'text', text: part })
 }
+
 export function inlines(text: string): Inline[] {
-  return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/).flatMap((part): Inline[] => {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s\u3000-\u303F\uFF00-\uFFEF<>()]+\)|<https?:\/\/[^\s\u3000-\u303F\uFF00-\uFFEF<>()]+>)/).flatMap((part): Inline[] => {
     if (/^\*\*[^*]+\*\*$/.test(part)) return [{ kind: 'bold', text: part.slice(2, -2) }]
     if (/^`[^`]+`$/.test(part)) return [{ kind: 'code', text: part.slice(1, -1) }]
     const link = /^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(part)
-    return link ? [{ kind: 'link', text: link[1]!, url: link[2]! }] : linkify(part)
+    if (link) return [{ kind: 'link', text: link[1]!, url: link[2]! }]
+    // `<https://x>`：Markdown 的自动链接写法。尖括号只是记号，不进链接。
+    const autolink = /^<(https?:\/\/[^>\s]+)>$/.exec(part)
+    if (autolink) return [{ kind: 'link', text: shortUrl(autolink[1]!), url: autolink[1]! }]
+    return linkify(part)
   })
 }
 export function markdownBlocks(text: string): Block[] {

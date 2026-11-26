@@ -55,7 +55,7 @@ export interface SectionPlan {
  * 都不进正文。留下来的只有「这是什么、给谁用、怎么用、有什么坑、在哪」。
  */
 export const SECTION_TEMPLATE: SectionPlan[] = [
-  { id: 'lead', title: '', hint: '文档标题加一句话，说清这是什么、给谁用；标题里不要出现 PRD、MVP、版本号这类内部说法' },
+  { id: 'lead', title: '', hint: '文档标题加一句话，说清这是什么、给谁用；标题里不要出现 PRD、MVP、版本号这类内部说法。正文里不要再把标题写一遍' },
   { id: 'audience', title: '一、什么时候需要用', hint: '谁在什么场景下用它，各自用它做什么' },
   { id: 'howto', title: '二、怎么用', hint: '怎么跑起来、怎么操作；命令照抄原文，不要改' },
   { id: 'pitfalls', title: '三、坑', hint: '前置条件、限制、常见问题与解法' },
@@ -111,6 +111,23 @@ export async function codeBaseline(repo: string): Promise<string | undefined> {
   if (!commit) return undefined
   const date = await git(repo, ['log', '-1', '--format=%cI'])
   return date ? `${repo} @ ${commit}（${date.slice(0, 10)}）` : `${repo} @ ${commit}`
+}
+
+/**
+ * 基线的另一种说法：分支、提交、日期，不带本机路径。
+ *
+ * 提示词里用这个。源笔记里的「代码基线」是活文档里的行，会过期——Octop 的
+ * PRD 写的还是一条已经不存在的分支的旧提交号。文档里的基线要跟着仓库走，
+ * 不能跟着那行字走。
+ */
+export async function codeBaselineNote(repo: string): Promise<string | undefined> {
+  const commit = await git(repo, ['rev-parse', '--short', 'HEAD'])
+  if (!commit) return undefined
+  const branch = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  const date = await git(repo, ['log', '-1', '--format=%cI'])
+  const parts = [branch && branch !== 'HEAD' ? `分支 ${branch}` : undefined, `提交 ${commit}`]
+  const text = parts.filter(Boolean).join('，')
+  return date ? `${text}（${date.slice(0, 10)}）` : text
 }
 
 /** 依赖声明的文件名。 */
@@ -314,8 +331,27 @@ export async function extractFacts(repo: string, source: string): Promise<Fact[]
   }
 
   const list = [...facts.values()]
-  list.sort((a, b) => a.id.localeCompare(b.id, 'en'))
-  return list.slice(0, MAX_FACTS)
+  // 截断不能只按字母。Octop 有一百多条依赖：`dep:` 按名字排在 `route:`、`env:`
+  // 前面，一截就把接口、变量、命令全挤掉；而大仓库的接口又有几百条，反过来
+  // 也把依赖挤掉。所以分两步：先把原文点过名的留下（读者要看的正是这些），
+  // 剩下的按种类轮流补，直到满额。
+  const named = (fact: Fact): boolean => {
+    const stem = fact.id.slice(fact.id.indexOf(':') + 1)
+    return stem.length >= 3 && source.toLowerCase().includes(stem.toLowerCase())
+  }
+  const kept: Fact[] = list.filter(named).slice(0, MAX_FACTS)
+  const seen = new Set(kept.map(fact => fact.id))
+  const rest = list.filter(fact => !seen.has(fact.id))
+  const queues = ['command', 'route', 'env', 'dependency']
+    .map(kind => rest.filter(fact => fact.kind === kind))
+  while (kept.length < MAX_FACTS && queues.some(queue => queue.length)) {
+    for (const queue of queues) {
+      const fact = queue.shift()
+      if (fact && kept.length < MAX_FACTS) kept.push(fact)
+    }
+  }
+  kept.sort((a, b) => a.id.localeCompare(b.id, 'en'))
+  return kept
 }
 
 /** 事实变了没有：值不同的，加上原来有现在没有的。 */
@@ -379,16 +415,35 @@ export function splitDocument(text: string): SplitDocument {
   }
 }
 
+/**
+ * 去掉正文里对标题的重复。
+ *
+ * 模型常把标题又写一遍（`**Octop 产品使用说明**`），而标题已经单独成行了——
+ * 页面上就连着出现三次。这里只去掉正文**开头**那一段与标题一样的文字。
+ */
+export function dropTitleEcho(body: string, title: string): string {
+  const want = title.trim()
+  if (!want) return body
+  const lines = body.split('\n')
+  let index = 0
+  while (index < lines.length && !(lines[index] ?? '').trim()) index++
+  const first = lines[index] ?? ''
+  const plain = first.trim().replace(/^#+\s*/, '').replace(/\*\*/g, '').trim()
+  if (plain !== want) return body
+  return lines.slice(index + 1).join('\n').trim()
+}
+
 /** 把几节写回一篇文档。 */
 export function buildDocument(sections: readonly DraftSection[]): string {
   const out: string[] = []
   for (const section of sections) {
+    const body = dropTitleEcho(section.body, section.title)
     if (section.id === 'lead') {
       out.push(`# ${section.title}`.trimEnd())
-      if (section.body) out.push('', section.body)
+      if (body) out.push('', body)
       continue
     }
-    out.push('', `## ${section.title}`, '', section.body)
+    out.push('', `## ${section.title}`, '', body)
   }
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n'
 }
@@ -471,14 +526,18 @@ const SYSTEM_PROMPT = [
   '- 不写给开发者或模型的指令（例如「必须」「不要只写计划」「给 ClaudeCode」「Read this PRD」这一类段落一律不进正文）。',
   '- 每一个数字、命令、接口都必须来自「事实」或「原文」，不许自己编；确实不确定的写「待核实」。',
   '- 依赖事实可能写成「包名 版本（声明 区间）」：写实际装着的那个版本。',
+  '- 代码基线（分支、提交号）以【代码基线】为准，不要抄原文里的——原文里的基线会过期。',
   '- 依赖事实里带版本约束（>=、< 这类符号）时，约束要照抄，不能只写一个数字：'
     + '「fastapi >=0.100.0」是「至少 0.100.0」，写成「0.100.0」就变成了「锁死在 0.100.0」。',
   '- 不要写生成日期。',
+  '- 链接写成「[文字](网址)」，不要写「<网址>」：尖括号只是 Markdown 的记号，'
+    + '带着它点开会 404。',
   '- facts 写这一节用到了哪些事实的 id。',
 ].join('\n')
 
 /** 提示词里各部分的上限，防止提示词被撑爆。 */
 const STYLE_LIMIT = 8000
+const RULES_LIMIT = 12000
 const SOURCE_LIMIT = 24000
 const BODY_LIMIT = 6000
 
@@ -487,12 +546,18 @@ export function buildPrompt(input: {
   source: string
   facts: readonly Fact[]
   style?: string
+  /** 项目自己的发布规则：写什么、不写什么、置顶区长什么样。 */
+  rules?: string
   sections: readonly SectionRequest[]
+  /** 仓库现在的分支与提交；比原文里的基线新。 */
+  baseline?: string
 }): string {
   const parts: string[] = []
   if (input.style) parts.push(`【风格样例】\n${input.style.slice(0, STYLE_LIMIT)}`)
+  if (input.rules) parts.push(`【发布规则】\n${input.rules.slice(0, RULES_LIMIT)}`)
   parts.push(`【原文】\n${input.source.slice(0, SOURCE_LIMIT)}`)
   parts.push(`【事实】\n${JSON.stringify(input.facts, null, 1)}`)
+  if (input.baseline) parts.push(`【代码基线】\n${input.baseline}`)
   parts.push('【要写的节】')
   for (const section of input.sections) {
     const here = section.body ? `\n现有正文：\n${section.body.slice(0, BODY_LIMIT)}` : '\n现有正文：（空，这一节是新写的）'
@@ -607,7 +672,9 @@ export async function rewriteSections(input: {
   source: string
   facts: readonly Fact[]
   style?: string
+  rules?: string
   sections: readonly SectionRequest[]
+  baseline?: string
 }): Promise<DraftSection[]> {
   const answer = await callModel(input.model, SYSTEM_PROMPT, buildPrompt(input))
   const sections = parseDraft(answer)
@@ -652,7 +719,7 @@ const NUMBER_PAT = /\d+(?:\.\d+)+|\d{2,}/g
  * 还有数字：文里出现的每一个两位以上的数字，都得在事实或原文里找得到，
  * 否则就是模型自己编的。
  */
-export function validateDraft(text: string, corpus: { facts: readonly Fact[]; source: string; style?: string }): DraftProblem[] {
+export function validateDraft(text: string, corpus: { facts: readonly Fact[]; source: string; style?: string; rules?: string; baseline?: string }): DraftProblem[] {
   const problems: DraftProblem[] = []
   for (const phrase of FORBIDDEN) {
     if (text.includes(phrase)) problems.push({ kind: 'forbidden', severity: 'block', detail: phrase })
@@ -661,7 +728,8 @@ export function validateDraft(text: string, corpus: { facts: readonly Fact[]; so
   for (const match of text.matchAll(PASSWORD_PAT)) problems.push({ kind: 'secret', severity: 'block', detail: `${match[1]} ${match[3]}` })
   for (const match of text.matchAll(INTERNAL_PATH)) problems.push({ kind: 'path', severity: 'block', detail: match[0].trim() })
   for (const match of text.matchAll(WINDOWS_PATH)) problems.push({ kind: 'path', severity: 'block', detail: match[0] })
-  const allowed = [...corpus.facts.map(fact => fact.value), corpus.source, corpus.style ?? '', new Date().toISOString().slice(0, 10)].join('\n')
+  // 代码基线也算出处：提交号里那串数字不是模型编的。
+  const allowed = [...corpus.facts.map(fact => fact.value), corpus.source, corpus.style ?? '', corpus.rules ?? '', corpus.baseline ?? '', new Date().toISOString().slice(0, 10)].join('\n')
   for (const match of text.matchAll(NUMBER_PAT)) {
     const token = match[0]
     if (!allowed.includes(token)) problems.push({ kind: 'number', severity: 'warn', detail: token })
@@ -736,6 +804,16 @@ export function metaPathOf(source: string): string {
   return `${base}${META_SUFFIX}`
 }
 
+/**
+ * 这个路径是不是改写产物。
+ *
+ * 产物不是源文件：拿 `PRD.飞书版.md` 去改写，会生出 `PRD.飞书版.飞书版.md`，
+ * 越改越多层。
+ */
+export function isRewriteArtifact(file: string): boolean {
+  return file.endsWith(OUTPUT_SUFFIX) || file.endsWith(META_SUFFIX)
+}
+
 /** 读旧产物与它的元数据；没有就当第一次写。 */
 async function readPrevious(output: string, metaPath: string): Promise<{ text?: string; meta?: RewriteMeta }> {
   const [text, meta] = await Promise.all([
@@ -760,15 +838,21 @@ export async function rewriteDocument(input: {
   model: RewriteModel
   /** 风格样例；不给就用旧产物自己。 */
   style?: string
+  /** 项目自己的发布规则：写什么、不写什么、置顶区长什么样。 */
+  rules?: string
   /** 事实从哪个目录抽；不给就找源文件所在的 git 仓库。 */
   repo?: string
   /** 强制全部重写。 */
   force?: boolean
 }): Promise<RewriteResult> {
+  if (isRewriteArtifact(input.file)) {
+    throw new Error(`${input.file} 是改写产物，不是源文件。要改写的是源文件，产物每次都会重新生成。`)
+  }
   const source = stripFrontmatter(await readFile(input.file, 'utf-8'))
   const repo = input.repo ?? await repoRootOf(dirname(input.file))
   const facts = await extractFacts(repo, source)
   const baseline = await codeBaseline(repo)
+  const baselineNote = await codeBaselineNote(repo)
   const output = outputPathOf(input.file)
   const metaPath = metaPathOf(input.file)
   const previous = await readPrevious(output, metaPath)
@@ -817,7 +901,7 @@ export async function rewriteDocument(input: {
         body: sections.find(section => section.id === plan.id)?.body,
       }))
 
-  const written = await rewriteSections({ model: input.model, source, facts, style, sections: requests })
+  const written = await rewriteSections({ model: input.model, source, facts, style, rules: input.rules, sections: requests, baseline: baselineNote })
 
   // 合并：没让重写的节原样留着，让重写的换成新的。
   const merged = SECTION_TEMPLATE.map(plan => {
@@ -830,7 +914,7 @@ export async function rewriteDocument(input: {
 
   const text = buildDocument(merged)
   const rewritten = written.map(section => section.id)
-  const problems = validateDraft(text, { facts, source, style })
+  const problems = validateDraft(text, { facts, source, style, rules: input.rules, baseline: baselineNote })
   // 密钥、口令、本机路径、给模型的指令：不写盘。数字对不上出处：写了，但标出来。
   if (problems.some(problem => problem.severity === 'block')) {
     return { output, changed: rewritten, text: '', problems, facts, baseline, upToDate: false }

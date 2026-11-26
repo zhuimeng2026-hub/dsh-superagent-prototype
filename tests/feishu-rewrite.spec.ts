@@ -1,13 +1,18 @@
 // Tests of the plain-language rewriting: the facts taken from the code, the sections kept and
 // rewritten, and the check that stands between a draft and a published document.
+import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import {
-  affectedSections, buildDocument, changedFacts, extractFacts, hashOf, outputPathOf, parseDraft,
+  affectedSections, buildDocument, changedFacts, extractFacts, hashOf, isRewriteArtifact, outputPathOf, parseDraft,
   rewriteDocument, splitDocument, validateDraft, type Fact, type RewriteModel,
 } from '../src/feishu/rewrite.ts'
+
+const execFileAsync = promisify(execFile)
 
 afterEach(() => { vi.unstubAllGlobals() })
 
@@ -118,6 +123,40 @@ it('splits a document into its sections and puts it back together', () => {
   expect(split.sections[1]?.body).toBe('装好依赖，起服务，调用接口。')
 })
 
+it('drops the title the model repeated in the body, because the title is already its own line', () => {
+  // 模型常把标题又写一遍：页面上就出现两次标题（一次标题行，一次正文开头）。
+  const withEcho = buildDocument([
+    { id: 'lead', title: 'Octop 产品使用说明', body: '**Octop 产品使用说明**\n\n这是正文。', facts: [] },
+  ])
+  expect(withEcho).toContain('# Octop 产品使用说明\n\n这是正文。')
+  expect(withEcho).not.toContain('**Octop 产品使用说明**')
+  // 只去掉开头那一段；正文里后面再提到标题要留着。
+  const later = buildDocument([
+    { id: 'lead', title: '甲', body: '**甲**\n\n前面提到甲，后面还提一次甲。', facts: [] },
+  ])
+  expect(later).toContain('后面还提一次甲。')
+})
+
+it('gives the model the rules of the project, so the plain-language version knows what to leave out', async () => {
+  const root = await workspace()
+  const source = join(root, 'PRD.md')
+  const { model, asked } = answering(FULL)
+  await rewriteDocument({
+    file: source,
+    model,
+    repo: root,
+    rules: '## 范围之外的不写\n- IM 通道接入（飞书 / 钉钉 / QQ）',
+  })
+  expect(asked[0]).toContain('【发布规则】')
+  expect(asked[0]).toContain('IM 通道接入')
+})
+
+it('takes a number written in the rules as its source', () => {
+  // 规则也是出处的来源：像素尺寸是规则里定死的，不是模型编的。
+  expect(validateDraft('竖版 1080×1920', { facts: [], source: '' })).not.toEqual([])
+  expect(validateDraft('竖版 1080×1920', { facts: [], source: '', rules: '竖版 1080×1920' })).toEqual([])
+})
+
 it('refuses a draft with a secret, a password, an internal path or an invented number', () => {
   const corpus = { facts: [{ id: 'dep:fastapi', kind: 'dependency' as const, value: 'fastapi 0.115.0' }], source: SOURCE }
   expect(validateDraft('装依赖：fastapi 0.115.0', corpus)).toEqual([])
@@ -154,6 +193,18 @@ it('writes the plain-language version and its facts, then leaves it alone while 
   const again = await rewriteDocument({ file: source, model, repo: root })
   expect(again.upToDate).toBe(true)
   expect(asked).toHaveLength(1)
+})
+
+it('refuses to rewrite its own output, because that would add another suffix', async () => {
+  const root = await workspace()
+  const source = join(root, 'PRD.md')
+  const { model } = answering(FULL)
+  await rewriteDocument({ file: source, model, repo: root })
+  const output = outputPathOf(source)
+  expect(isRewriteArtifact(output)).toBe(true)
+  await expect(rewriteDocument({ file: output, model, repo: root })).rejects.toThrow(/改写产物/)
+  // 产物没有被再改写一层。
+  expect(existsSync(join(root, 'PRD.飞书版.飞书版.md'))).toBe(false)
 })
 
 it('rewrites only the section a changed fact reaches', async () => {
@@ -303,4 +354,22 @@ it('reads the dependencies even when the code files take all the room', async ()
   await writeFile(join(root, 'PRD.md'), SOURCE, 'utf-8')
   const facts = await extractFacts(root, SOURCE)
   expect(facts.find(fact => fact.id === 'dep:fastapi')?.value).toBe('fastapi >=0.110')
+})
+
+it('gives the model the baseline of the repository, not the one the source claims', async () => {
+  const root = await workspace()
+  const run = async (...args: string[]) => execFileAsync('git', ['-c', 'safe.directory=*', '-C', root, ...args])
+  await run('init', '-q')
+  await run('config', 'user.email', 't@example.com')
+  await run('config', 'user.name', 't')
+  await run('add', '-A')
+  await run('commit', '-q', '-m', 'first')
+  const source = join(root, 'PRD.md')
+  await writeFile(source, '# 甲\n\n代码基线：分支 `old-branch`，HEAD `deadbee`\n', 'utf-8')
+  const { model, asked } = answering(FULL)
+  await rewriteDocument({ file: source, model, repo: root })
+  // The source's own baseline line is what went stale before; the prompt now
+  // carries the repository's own branch and commit.
+  expect(asked[0]).toContain('【代码基线】')
+  expect(asked[0]).toContain('提交 ')
 })

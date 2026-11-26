@@ -282,7 +282,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 - Runtime sends `pullEndNotices` for merged or closed Tickets.
 - Executor tools bind reported pull requests with `readPull` and `claimPull`, using the GitHub context exposed by Runtime.
 - MasterAssessor reads repository files with `readRepositoryPath`.
-- Sessions and Prompts register built-in skills only for GitHub and Feishu. Migration converts their schema-10 records.
+- Sessions and Prompts register built-in skills only for GitHub and Feishu, the Feishu documents skill among the Feishu ones. Migration converts their schema-10 records.
 - Setup probes only GitHub and Feishu account fields (`SETUP_FIELDS`). Only those Sources receive account setup problems through `SourceContext.problem`.
 
 
@@ -374,7 +374,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
-| `src/feishu-publish.ts` | The publishing plugin, exported as `./feishu-publish`: the `feishu_publish` tool it puts on every agent, the skill that tells a model when to publish, and the configuration that fences both. The tool publishes only Markdown inside the configured roots, and rebuilds only a document this plugin published |
+| `src/feishu-publish.ts` | The publishing plugin, exported as `./feishu-publish`: the `feishu_publish` tool it puts on every agent, the skill that tells a model when to publish, and the configuration that fences both. The tool publishes only Markdown inside the configured roots, and rebuilds only a document this plugin published. Its configuration also says which rule files govern a document's plain-language version: the general ones, and the ones of the project whose directory holds it |
 | `src/feishu/publish.ts` | The publishing itself: the credentials, the document's life — create or rebuild, title, blocks, images, public sharing, owner, groups — and the answer it gives. A rebuild is checked against the document's member list, so only a document the application created may be cleared |
 | `src/feishu/client.ts` | The Feishu OpenAPI calls the publishing uses, each with the pitfall it has |
 | `src/feishu/markdown.ts` | The Markdown the publishing reads: the parser, the blocks it makes, and the preparation that turns a note into something a Feishu document can show |
@@ -458,6 +458,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/locales.spec.ts`, `tests/styles.spec.ts` | The copy in both languages, the stylesheet |
 | `tests/class-docs.spec.ts` | Every class in `src` has a JSDoc block before it |
 | `tests/docs.spec.ts` | Numbered documents link only to earlier ones, every local link resolves, no document has merge conflict markers, and this document's tables list every module and every test |
+| `tests/model-pool.spec.ts` | 009 Model pool names the groups and the models the machine's own magpie configuration has, and counts them right |
 
 `tests/fixtures/` holds what several tests share: `host.ts`, a simulated DeepSeek Harness host; `panel-server.ts` and `panel.tsx`, the fake management API and the panel around a page; `deployment.ts`, a resolved deployment; `git.ts`, the environment of every git the tests start, which names no repository; and `async.ts`.
 

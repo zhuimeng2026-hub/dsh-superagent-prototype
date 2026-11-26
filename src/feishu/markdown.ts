@@ -42,9 +42,18 @@ const IMAGE_RE = /^!\[([^\]]*)\]\(([^)]+)\)$/
 const DIVIDERS = new Set(['* * *', '***', '---', '___'])
 const HEADING_PREFIXES = ['###### ', '##### ', '#### ', '### ', '## ', '# ']
 
-/** 把 `[文字](链接)` 变成 `文字（链接）`——飞书正文里没有链接语法。 */
+/**
+ * 行内链接的两种写法：`[文字](链接)` 与 `<链接>`。
+ *
+ * 飞书正文有链接样式（`text_element_style.link`），链接不用再拍平成
+ * 「文字（链接）」的死文本。尖括号只是 Markdown 的记号，不属于链接本身——
+ * 带着它点开会 404，所以 `<链接>` 先改写成 `[链接](链接)`。
+ */
+const AUTOLINK_RE = /<(https?:\/\/[^>\s]+)>/g
+
+/** 把 `<链接>` 改写成 `[链接](链接)`；`[文字](链接)` 原样留着。 */
 export function normalizeInline(s: string): string {
-  return s.trim().replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1（$2）')
+  return s.trim().replace(AUTOLINK_RE, '[$1]($1)')
 }
 
 /** 标题文本：先内联归一，再脱掉包裹的 `**`。 */
@@ -204,38 +213,112 @@ export function parseMarkdown(md: string): Item[] {
 }
 
 /**
- * 解析文本里的内联样式：`**粗体**` 与 `` `行内代码` ``。
+ * 解析文本里的内联样式：`**粗体**`、`` `行内代码` ``、`[文字](链接)`、`<链接>`、裸链接。
  *
- * 与 Python 版一致：粗体在外层先行内代码，粗体里的代码同时带 bold 与 inline_code。
+ * 与 Python 版一致：粗体在外层先行内代码，粗体里的代码同时带 bold 与 inline_code；
+ * 链接带 `text_element_style.link`，所以飞书上点得开。
  */
 export function richElements(text: string): unknown[] {
   const source = text.slice(0, MAX_TEXT_LENGTH)
-  const elements: unknown[] = []
-
-  for (const part of source.split(/(\*\*.*?\*\*)/)) {
-    if (!part) continue
-    const isBold = part.startsWith('**') && part.endsWith('**') && part.length >= 4
-    elements.push(...inlineElements(isBold ? part.slice(2, -2) : part, isBold))
-  }
-
+  const elements = parseRuns(source, { bold: false, mode: 'body' }).map(runElement)
   return elements.length > 0 ? elements : [{ text_run: { content: source } }]
 }
 
-function inlineElements(text: string, bold: boolean): unknown[] {
-  const elements: unknown[] = []
-  for (const part of text.split(/(`[^`]+`)/)) {
-    if (!part) continue
-    if (part.startsWith('`') && part.endsWith('`') && part.length >= 3) {
-      const style: Record<string, unknown> = { inline_code: true }
-      if (bold) style.bold = true
-      elements.push({ text_run: { content: part.slice(1, -1), text_element_style: style } })
-    } else if (bold) {
-      elements.push({ text_run: { content: part, text_element_style: { bold: true } } })
-    } else {
-      elements.push({ text_run: { content: part } })
+/**
+ * 标题里的行内样式：只认链接。
+ *
+ * 标题里其余的 Markdown 记号（`**`、`）`）保持原样——标题不是正文，
+ * 不必把它排版成正文的样子。
+ */
+function headingElements(text: string): unknown[] {
+  const source = text.slice(0, MAX_TEXT_LENGTH)
+  const elements = parseRuns(source, { bold: false, mode: 'heading' }).map(runElement)
+  return elements.length > 0 ? elements : [{ text_run: { content: source } }]
+}
+
+/** 一段行内文本解析出来的片段。 */
+interface InlineRun {
+  text: string
+  bold?: boolean
+  code?: boolean
+  url?: string
+}
+
+/**
+ * 行内记号。顺序有讲究：代码与粗体先于链接，
+ * 免得链接地址里的字符被当成别的东西。
+ *
+ * 地址里不容许空白、尖括号、圆括号、中文标点与全角符号：
+ * 链接必须止于标点之前，把「。」或「）」吃进地址，点开就是 404。
+ */
+const INLINE_TOKEN_RE =
+  /(`[^`]+`)|(\*\*[^*]+\*\*)|(\[([^\]]*)\]\((https?:\/\/[^\s\u3000-\u303F\uFF00-\uFFEF<>()]+)\))|(<(https?:\/\/[^\s\u3000-\u303F\uFF00-\uFFEF<>()]+)>)|(https?:\/\/[^\s\u3000-\u303F\uFF00-\uFFEF<>()]*[^\s\u3000-\u303F\uFF00-\uFFEF<>().,;:!?'"])/g
+
+/**
+ * 把一段文本切成行内片段。
+ *
+ * `mode` 决定认哪些记号：正文认全部，标题只认链接。
+ */
+function parseRuns(text: string, context: { bold: boolean; mode: 'body' | 'heading' }): InlineRun[] {
+  const runs: InlineRun[] = []
+  let last = 0
+
+  for (const match of text.matchAll(INLINE_TOKEN_RE)) {
+    const index = match.index ?? 0
+    if (index > last) runs.push({ text: text.slice(last, index), bold: context.bold || undefined })
+    last = index + match[0].length
+
+    // 捕获组：1 代码 · 2 粗体 · 3 整条 Markdown 链接 · 4 链接文字 · 5 链接地址
+    //          6 整条尖括号链接 · 7 尖括号里的地址 · 8 裸链接
+    const code = match[1]
+    const boldToken = match[2]
+    const label = match[4]
+    const url = match[5]
+    const autolink = match[7]
+    const bare = match[8]
+
+    if (code !== undefined) {
+      // 标题里的反引号只是字面量。
+      if (context.mode === 'heading') runs.push({ text: code })
+      else runs.push({ text: code.slice(1, -1), code: true })
+      continue
     }
+    if (boldToken !== undefined) {
+      if (context.mode === 'heading') runs.push({ text: boldToken })
+      else runs.push(...parseRuns(boldToken.slice(2, -2), { bold: true, mode: 'body' }))
+      continue
+    }
+    if (url !== undefined) {
+      // `[文字](链接)`：链接文字本身还可能带样式，所以先切再挂地址。
+      const inner = parseRuns(label ?? '', { bold: context.bold, mode: context.mode })
+      if (!inner.length) runs.push({ text: url, url, bold: context.bold || undefined })
+      else runs.push(...inner.map(run => ({ ...run, url })))
+      continue
+    }
+    if (autolink !== undefined) {
+      // `<链接>`：尖括号是记号，不进链接。
+      runs.push({ text: autolink, url: autolink })
+      continue
+    }
+    if (bare !== undefined) {
+      runs.push({ text: bare, url: bare })
+      continue
+    }
+    runs.push({ text: match[0], bold: context.bold || undefined })
   }
-  return elements
+
+  if (last < text.length) runs.push({ text: text.slice(last), bold: context.bold || undefined })
+  return runs.filter(run => run.text !== '')
+}
+
+/** 一个行内片段变成飞书的一个 `text_run`。 */
+function runElement(run: InlineRun): unknown {
+  const style: Record<string, unknown> = {}
+  if (run.bold) style.bold = true
+  if (run.code) style.inline_code = true
+  if (run.url) style.link = { url: run.url }
+  if (!Object.keys(style).length) return { text_run: { content: run.text } }
+  return { text_run: { content: run.text, text_element_style: style } }
 }
 
 function plainElements(text: string): unknown[] {
@@ -248,22 +331,22 @@ export function toBlocks(items: Item[]): Block[] {
   for (const item of items) {
     switch (item.kind) {
       case 'h1':
-        blocks.push({ block_type: BLOCK_TYPES.h1, heading1: { elements: plainElements(item.value) } })
+        blocks.push({ block_type: BLOCK_TYPES.h1, heading1: { elements: headingElements(item.value) } })
         break
       case 'h2':
-        blocks.push({ block_type: BLOCK_TYPES.h2, heading2: { elements: plainElements(item.value) } })
+        blocks.push({ block_type: BLOCK_TYPES.h2, heading2: { elements: headingElements(item.value) } })
         break
       case 'h3':
-        blocks.push({ block_type: BLOCK_TYPES.h3, heading3: { elements: plainElements(item.value) } })
+        blocks.push({ block_type: BLOCK_TYPES.h3, heading3: { elements: headingElements(item.value) } })
         break
       case 'h4':
-        blocks.push({ block_type: BLOCK_TYPES.h4, heading4: { elements: plainElements(item.value) } })
+        blocks.push({ block_type: BLOCK_TYPES.h4, heading4: { elements: headingElements(item.value) } })
         break
       case 'h5':
-        blocks.push({ block_type: BLOCK_TYPES.h5, heading5: { elements: plainElements(item.value) } })
+        blocks.push({ block_type: BLOCK_TYPES.h5, heading5: { elements: headingElements(item.value) } })
         break
       case 'h6':
-        blocks.push({ block_type: BLOCK_TYPES.h6, heading6: { elements: plainElements(item.value) } })
+        blocks.push({ block_type: BLOCK_TYPES.h6, heading6: { elements: headingElements(item.value) } })
         break
       case 'text':
         blocks.push({ block_type: BLOCK_TYPES.text, text: { elements: richElements(item.value) } })

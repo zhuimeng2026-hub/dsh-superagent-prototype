@@ -144,6 +144,11 @@ export class Sessions {
       await ctx.sessionController.create({ sessionId: id as SessionId, workspaceId: workspace.id,
         agentPreset: role === 'worker' ? WORKER_PRESET : ROUTER_PRESET })
       result = await ctx.sessionController.resolveAgent(id as SessionId)
+    } else {
+      // The Host groups a Session by the Workspace that owns its directory, and it keeps the registration in its own store.
+      // A Session whose registration was lost there (an older record, a Workspace deleted by hand) lingers as Ungrouped in the
+      // sidebar, so re-assert the Workspace every time. Creating one for a directory that is gone is not this Session's problem.
+      await ctx.workspaceRegistry.create(cwd).catch(() => undefined)
     }
     if ('error' in result) throw result.error
     const settings = this.host.store.settings()
@@ -317,7 +322,7 @@ export class Sessions {
     previous?.dispose()
     const disposers: (() => void)[] = []
     for (const [name, content] of this.host.prompts.skills(version.config)) {
-      const bundled = name === 'feishu' || name === 'github' ? bundledSkills[name] : undefined
+      const bundled = Object.hasOwn(bundledSkills, name) ? bundledSkills[name as keyof typeof bundledSkills] : undefined
       const body = version.config.skills[name] ?? ''
       const description = bundled?.description ?? (body.replace(/\s+/g, ' ').slice(0, 120) || 'Custom dsh-superagent operational skill.')
       disposers.push(scope.skills.register({ name: `${SKILL_PREFIX}${name}`, description, content, source: 'runtime',

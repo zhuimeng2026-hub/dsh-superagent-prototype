@@ -27,3 +27,15 @@ it('keeps a link to anything but a web address as text, and leaves the punctuati
     { kind: 'link', text: 'example.com/b', url: 'https://example.com/b' }, { kind: 'text', text: ') and ' },
     { kind: 'link', text: 'example.com/c', url: 'https://example.com/c' }, { kind: 'text', text: '?' }])
 })
+
+it('opens an angle-bracket address, because the brackets are a mark and not part of it', () => {
+  expect(inlines('发布页为 <https://gitee.com/webheat/octop_client/releases>。')).toEqual([
+    { kind: 'text', text: '发布页为 ' },
+    { kind: 'link', text: 'gitee.com/webheat/octop_client/re…', url: 'https://gitee.com/webheat/octop_client/releases' },
+    { kind: 'text', text: '。' }])
+  // 全角括号也不能吃进地址。
+  expect(linkify('（https://example.com/a.zip）里')).toEqual([
+    { kind: 'text', text: '（' },
+    { kind: 'link', text: 'example.com/a.zip', url: 'https://example.com/a.zip' },
+    { kind: 'text', text: '）里' }])
+})

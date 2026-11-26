@@ -38,6 +38,21 @@ export const name = 'dsh-superagent-feishu-publish'
 /** The services the plugin needs. */
 export const inject = ['agents', 'skills', 'webServer']
 
+/**
+ * 一个项目的规则，和它管的目录。
+ *
+ * 类型写在这里，是为了让导出的配置类型能被写出来：schemastery 推断出来的
+ * 嵌套对象带一个别处的 `Dict`，声明文件写不出它的名字。
+ */
+export interface ProjectRules {
+  /** 管哪些文档：这些目录底下的 Markdown。 */
+  root: string
+  /** 规则文件，按顺序读，合成一段喂给写稿模型。 */
+  rules: string[]
+}
+
+const projectRules: s<ProjectRules> = s.object({ root: s.string(), rules: s.array(s.string()) })
+
 /** The plugin's configuration. Every key has a default, so an enabled plugin needs no configuration. */
 export const Config = s.object({
   profile: s.string().default('personal')
@@ -68,6 +83,14 @@ export const Config = s.object({
     .description('Where the key named by rewriteKeyEnv is looked up when the process has no such variable; empty means ~/.dsh/.credentials.yaml.'),
   rewriteStyle: s.string().default('')
     .description('A document whose style the plain-language version follows; empty means the previous version of the same document.'),
+  rewriteRules: s.array(s.string()).default([])
+    .description('The rules that tell the plain-language version what to write and what to leave out; '
+      + 'they are read in order and given to the model as one block, before the rules of the project. '
+      + 'Empty means only the built-in rules.'),
+  rewriteRulesByRoot: s.array(projectRules).default([])
+    .description('The rules of a project, by the directory whose documents they govern: a document under that '
+      + 'directory also gets those rules, after the general ones. A document under no listed directory gets '
+      + 'only the general rules. Each entry names the directory in `root` and its rule files in `rules`.'),
   rewriteTimeoutMs: s.number().default(180000)
     .description('Time limit of one rewriting, in milliseconds.'),
   roots: s.array(s.string()).default([])
@@ -76,6 +99,26 @@ export const Config = s.object({
     .description('Where the desk remembers which document it published for which file; empty means ~/.config/feishu-publish-desk.json.'),
 })
 export type PublishConfig = ReturnType<typeof Config>
+
+/**
+ * 一篇文档受哪几份规则管：先通用的，再它所在项目的那份。
+ *
+ * 项目规则按目录限定，是有意的：甲项目的口径不该管乙项目的文档。一份写着
+ * 「本文件优先」的规则要是没有范围，就会压住发布台碰到的每一篇文档。
+ */
+export function rewriteRulePaths(file: string, config: PublishConfig): string[] {
+  const paths = [...config.rewriteRules]
+  let owner: string[] = []
+  let ownerPath = ''
+  for (const entry of config.rewriteRulesByRoot) {
+    const absolute = resolve(entry.root)
+    if ((file === absolute || file.startsWith(`${absolute}/`)) && absolute.length > ownerPath.length) {
+      owner = entry.rules
+      ownerPath = absolute
+    }
+  }
+  return [...paths, ...owner]
+}
 
 const Arguments = z.object({
   file: z.string().min(1)
@@ -229,9 +272,18 @@ export function apply(ctx: Context, config: PublishConfig): void {
           const style = config.rewriteStyle
             ? stripFrontmatter(await readFile(config.rewriteStyle, 'utf-8').catch(() => undefined) ?? '')
             : undefined
+          // 规则文件读不到是配置错了，要说清楚；悄悄跳过等于让模型按旧口径写。
+          const ruleTexts: string[] = []
+          for (const path of rewriteRulePaths(input.file, config)) {
+            const text = await readFile(path, 'utf-8').catch(() => undefined)
+            if (text === undefined) throw new Error(`读不了发布规则文件 ${path}`)
+            const body = stripFrontmatter(text).trim()
+            if (body) ruleTexts.push(body)
+          }
           return rewriteDocument({
             file: input.file,
             style,
+            rules: ruleTexts.join('\n\n'),
             force: input.force,
             model: {
               baseUrl: config.rewriteBaseUrl,

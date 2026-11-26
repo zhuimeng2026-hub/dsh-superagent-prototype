@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { Config, apply } from '../src/feishu-publish.ts'
+import { Config, apply, rewriteRulePaths } from '../src/feishu-publish.ts'
 import { CUT_MARKERS, clean, convertTables, fenceToIndented, parseMarkdown, prepareMarkdown, resolveDocTitle, richElements, toBlocks } from '../src/feishu/markdown.ts'
 import { resolveCredentials } from '../src/feishu/publish.ts'
 
@@ -42,9 +42,29 @@ it('reads a heading, a paragraph, a list and a divider as the blocks Feishu show
   expect(blocks[0]).toEqual({ block_type: 3, heading1: { elements: [{ text_run: { content: '标题' } }] } })
 })
 
-it('writes a link as text and a URL, because a Feishu body has no link syntax', () => {
+it('writes a link as a clickable run, because a Feishu body has link styles', () => {
   const items = parseMarkdown('看 [下载页](https://example.com/a) 与 <https://example.com/b>')
-  expect(items[0]).toEqual({ kind: 'text', value: '看 下载页（https://example.com/a） 与 <https://example.com/b>' })
+  expect(items[0]).toEqual({ kind: 'text', value: '看 [下载页](https://example.com/a) 与 [https://example.com/b](https://example.com/b)' })
+  expect(richElements(items[0]!.value)).toEqual([
+    { text_run: { content: '看 ' } },
+    { text_run: { content: '下载页', text_element_style: { link: { url: 'https://example.com/a' } } } },
+    { text_run: { content: ' 与 ' } },
+    { text_run: { content: 'https://example.com/b', text_element_style: { link: { url: 'https://example.com/b' } } } },
+  ])
+})
+
+it('keeps the angle brackets and the trailing punctuation out of the address, so the link opens', () => {
+  const elements = richElements('见 <https://gitee.com/webheat/octop_client/releases>。') as Array<{
+    text_run: { content: string; text_element_style?: { link?: { url?: string } } }
+  }>
+  const urls = elements.map(element => element.text_run.text_element_style?.link?.url).filter(Boolean)
+  expect(urls).toEqual(['https://gitee.com/webheat/octop_client/releases'])
+  // 尖括号是记号，不是地址的一部分；地址也不能把后面的标点吃进去。
+  expect(richElements('（https://example.com/a.zip）里')).toEqual([
+    { text_run: { content: '（' } },
+    { text_run: { content: 'https://example.com/a.zip', text_element_style: { link: { url: 'https://example.com/a.zip' } } } },
+    { text_run: { content: '）里' } },
+  ])
 })
 
 it('keeps an indented block as code and a fenced block as code', () => {
@@ -239,4 +259,25 @@ it('rebuilds only a document this plugin published, and remembers the ones it cr
   await again.execute({ file: 'note.md', doc_id: 'DSuXdEXsgoWZnyxUSymcuVHOnug' }, { signal })
   expect(publish.mock.calls[2]?.[0]?.docId).toBe('DSuXdEXsgoWZnyxUSymcuVHOnug')
   rmSync(root, { recursive: true, force: true })
+})
+
+it('gives a document the general rules and the rules of the project it belongs to', () => {
+  const config = Config({
+    rewriteRules: ['/rules/general.md'],
+    rewriteRulesByRoot: [{ root: '/projects/alpha', rules: ['/rules/alpha.md'] },
+      { root: '/projects/beta/deep', rules: ['/rules/beta.md'] }],
+  })
+  // A document of a project gets the general rules first, then its own project's.
+  expect(rewriteRulePaths('/projects/alpha/doc.md', config)).toEqual(['/rules/general.md', '/rules/alpha.md'])
+  // A document of no project gets only the general rules: one project's wording does not govern another's document.
+  expect(rewriteRulePaths('/projects/gamma/doc.md', config)).toEqual(['/rules/general.md'])
+  // The nearest root wins, so a nested project is not ruled by its parent.
+  expect(rewriteRulePaths('/projects/beta/deep/doc.md', config)).toEqual(['/rules/general.md', '/rules/beta.md'])
+  // A directory whose name is a prefix of another directory is not inside it.
+  expect(rewriteRulePaths('/projects/alpha-extra/doc.md', config)).toEqual(['/rules/general.md'])
+})
+
+it('has no project rules when the configuration names none', () => {
+  expect(Config({}).rewriteRulesByRoot).toEqual([])
+  expect(rewriteRulePaths('/anywhere/doc.md', Config({}))).toEqual([])
 })

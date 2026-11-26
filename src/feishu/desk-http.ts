@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { DeskError, deskRelative, deskRoots, listDeskFiles, previewDeskContent, readDeskFile, resolveDeskPath, writeDeskFile, type DeskRoot } from './desk.ts'
 import type { DeskStore } from './desk-store.ts'
 import type { PublishResult } from './publish.ts'
-import type { RewriteResult } from './rewrite.ts'
+import { isRewriteArtifact, type RewriteResult } from './rewrite.ts'
 
 /** 面板请求要带的标记头，值固定为 `1`。 */
 export const DESK_HEADER = 'x-publish-desk'
@@ -114,6 +114,8 @@ export function deskRoutes(host: DeskHost): Record<string, Route> {
       const parsed = RewriteBody.parse(await body(MAX_BODY))
       const root = rootOf(parsed.root)
       if (!host.rewrite) throw new DeskError(400, '这个插件没有开启改写')
+      // 产物不是源文件：拿改写产物再改写一遍，只会多出一层后缀。
+      if (isRewriteArtifact(parsed.path)) throw new DeskError(400, `${parsed.path} 是改写产物，不是源文件。要改写的是源文件。`)
       const file = resolveDeskPath(root.path, parsed.path)
       await readDeskFile(root.path, parsed.path)
       const result = await host.rewrite({ file, force: parsed.force })
