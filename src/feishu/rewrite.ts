@@ -546,7 +546,7 @@ export function buildPrompt(input: {
   source: string
   facts: readonly Fact[]
   style?: string
-  /** 项目自己的发布规则：写什么、不写什么、置顶区长什么样。 */
+  /** 项目自己的改写规则：写什么、不写什么、置顶区长什么样。 */
   rules?: string
   sections: readonly SectionRequest[]
   /** 仓库现在的分支与提交；比原文里的基线新。 */
@@ -554,7 +554,7 @@ export function buildPrompt(input: {
 }): string {
   const parts: string[] = []
   if (input.style) parts.push(`【风格样例】\n${input.style.slice(0, STYLE_LIMIT)}`)
-  if (input.rules) parts.push(`【发布规则】\n${input.rules.slice(0, RULES_LIMIT)}`)
+  if (input.rules) parts.push(`【改写规则】\n${input.rules.slice(0, RULES_LIMIT)}`)
   parts.push(`【原文】\n${input.source.slice(0, SOURCE_LIMIT)}`)
   parts.push(`【事实】\n${JSON.stringify(input.facts, null, 1)}`)
   if (input.baseline) parts.push(`【代码基线】\n${input.baseline}`)
@@ -838,7 +838,7 @@ export async function rewriteDocument(input: {
   model: RewriteModel
   /** 风格样例；不给就用旧产物自己。 */
   style?: string
-  /** 项目自己的发布规则：写什么、不写什么、置顶区长什么样。 */
+  /** 项目自己的改写规则：写什么、不写什么、置顶区长什么样。 */
   rules?: string
   /** 事实从哪个目录抽；不给就找源文件所在的 git 仓库。 */
   repo?: string

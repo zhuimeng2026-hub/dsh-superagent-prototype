@@ -147,7 +147,7 @@ it('gives the model the rules of the project, so the plain-language version know
     repo: root,
     rules: '## 范围之外的不写\n- IM 通道接入（飞书 / 钉钉 / QQ）',
   })
-  expect(asked[0]).toContain('【发布规则】')
+  expect(asked[0]).toContain('【改写规则】')
   expect(asked[0]).toContain('IM 通道接入')
 })
 
